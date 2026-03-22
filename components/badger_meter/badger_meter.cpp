@@ -117,15 +117,8 @@ bool BadgerMeterComponent::read_bit_() {
 
 uint8_t BadgerMeterComponent::read_byte_(bool &ok) {
   // Frame format: start(0), 7 data bits (LSB first), parity, stop(1)
-  // Total: 10 bits per character
+  // Assumes start bit has already been consumed by the caller.
   ok = true;
-
-  // Read start bit - should be 0 (LOW)
-  bool start = this->read_bit_();
-  if (start) {
-    ESP_LOGW(TAG, "Expected start bit (0), got 1");
-    ok = false;
-  }
 
   // Read 7 data bits, LSB first
   uint8_t value = 0;
@@ -158,15 +151,47 @@ uint8_t BadgerMeterComponent::read_byte_(bool &ok) {
 void BadgerMeterComponent::read_data_() {
   this->read_buffer_.clear();
 
-  // Wait for start of message: clock bits until we get a valid start bit.
-  // The meter may send idle (high) bits before the first character.
-  // We try up to MAX_READ_BYTES characters.
-  for (int i = 0; i < MAX_READ_BYTES; i++) {
-    bool ok;
-    uint8_t byte = this->read_byte_(ok);
+  // Sync: clock bits until we see a start bit (0).
+  // The meter sends idle (1) bits before the first character.
+  // Allow up to 200 idle bits (~200ms) before giving up.
+  static const int MAX_SYNC_BITS = 200;
+  int sync_count = 0;
+  for (; sync_count < MAX_SYNC_BITS; sync_count++) {
+    bool bit = this->read_bit_();
+    if (!bit) {
+      // Found start bit (0) — begin reading characters
+      break;
+    }
+  }
+  if (sync_count >= MAX_SYNC_BITS) {
+    ESP_LOGW(TAG, "No start bit found after %d bits, meter not responding", MAX_SYNC_BITS);
+    return;
+  }
+  ESP_LOGD(TAG, "Synced after %d idle bits", sync_count);
 
+  // We already consumed the first start bit, read the first byte
+  bool ok;
+  uint8_t byte = this->read_byte_(ok);
+  if (!ok) {
+    ESP_LOGW(TAG, "Frame error on first byte, discarding read");
+    return;
+  }
+  if (byte >= 0x20 && byte <= 0x7E) {
+    this->read_buffer_ += static_cast<char>(byte);
+  }
+
+  // Read remaining bytes — each starts with a start bit
+  for (int i = 1; i < MAX_READ_BYTES; i++) {
+    // Read and verify start bit
+    bool start = this->read_bit_();
+    if (start) {
+      ESP_LOGW(TAG, "Expected start bit (0) at byte %d, got 1", i);
+      this->read_buffer_.clear();
+      return;
+    }
+
+    byte = this->read_byte_(ok);
     if (!ok) {
-      // Parity or framing error — discard entire read (per kmeter behavior)
       ESP_LOGW(TAG, "Frame error at position %d, discarding read", i);
       this->read_buffer_.clear();
       return;
