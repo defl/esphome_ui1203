@@ -155,69 +155,32 @@ uint8_t BadgerMeterComponent::read_byte_(bool &ok) {
 void BadgerMeterComponent::read_data_() {
   this->read_buffer_.clear();
 
-  // Sync: clock bits until we see a start bit (0).
-  // The meter sends idle (1) bits before the first character.
-  // Allow up to 500 idle bits (~500ms) before giving up.
-  static const int MAX_SYNC_BITS = 500;
-  int sync_count = 0;
-  int zeros_seen = 0;
-  for (; sync_count < MAX_SYNC_BITS; sync_count++) {
-    bool bit = this->read_bit_();
-    if (!bit) {
-      zeros_seen++;
-      // Found start bit (0) — begin reading characters
-      break;
-    }
-    // Log first 20 raw bits for diagnostics
-    if (sync_count < 20) {
-      ESP_LOGD(TAG, "Sync bit %d: %d", sync_count, bit ? 1 : 0);
-    }
-  }
-  if (sync_count >= MAX_SYNC_BITS) {
-    ESP_LOGW(TAG, "No start bit found after %d bits (saw %d zeros), meter not responding",
-             MAX_SYNC_BITS, zeros_seen);
-    return;
-  }
-  ESP_LOGD(TAG, "Synced after %d idle bits", sync_count);
-
-  // We already consumed the first start bit, read the first byte
-  bool ok;
-  uint8_t byte = this->read_byte_(ok);
-  if (!ok) {
-    ESP_LOGW(TAG, "Frame error on first byte, discarding read");
-    return;
-  }
-  if (byte >= 0x20 && byte <= 0x7E) {
-    this->read_buffer_ += static_cast<char>(byte);
+  // Diagnostic mode: read raw bits and log them so we can determine
+  // the correct framing and inversion from real hardware.
+  static const int DIAG_BITS = 100;
+  bool raw_bits[DIAG_BITS];
+  for (int i = 0; i < DIAG_BITS; i++) {
+    raw_bits[i] = this->data_pin_->digital_read();
+    // Clock cycle
+    this->clock_pin_->digital_write(false);
+    delayMicroseconds(500);
+    this->clock_pin_->digital_write(true);
+    delayMicroseconds(500);
   }
 
-  // Read remaining bytes — each starts with a start bit
-  for (int i = 1; i < MAX_READ_BYTES; i++) {
-    // Read and verify start bit
-    bool start = this->read_bit_();
-    if (start) {
-      ESP_LOGW(TAG, "Expected start bit (0) at byte %d, got 1", i);
-      this->read_buffer_.clear();
-      return;
-    }
-
-    byte = this->read_byte_(ok);
-    if (!ok) {
-      ESP_LOGW(TAG, "Frame error at position %d, discarding read", i);
-      this->read_buffer_.clear();
-      return;
-    }
-
-    if (byte == '\r' || byte == '\n') {
-      break;  // End of message
-    }
-
-    if (byte >= 0x20 && byte <= 0x7E) {
-      this->read_buffer_ += static_cast<char>(byte);
-    } else {
-      ESP_LOGW(TAG, "Non-printable byte at position %d: 0x%02X", i, byte);
+  // Log as groups of 10 (one frame per line)
+  for (int i = 0; i < DIAG_BITS; i += 10) {
+    int remaining = DIAG_BITS - i;
+    if (remaining >= 10) {
+      ESP_LOGI(TAG, "Bits %2d-%2d: %d %d %d %d %d %d %d %d %d %d",
+               i, i + 9,
+               raw_bits[i], raw_bits[i+1], raw_bits[i+2], raw_bits[i+3], raw_bits[i+4],
+               raw_bits[i+5], raw_bits[i+6], raw_bits[i+7], raw_bits[i+8], raw_bits[i+9]);
     }
   }
+
+  // Don't try to parse yet — just collect raw data
+  ESP_LOGI(TAG, "Raw bit dump complete. Analyze to determine framing and inversion.");
 }
 
 void BadgerMeterComponent::parse_data_(const std::string &data) {
