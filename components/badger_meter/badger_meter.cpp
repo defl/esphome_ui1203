@@ -56,7 +56,11 @@ void BadgerMeterComponent::loop() {
     case ReadState::POWER_UP: {
       // Wait for meter to power up (typically 3 seconds)
       if ((now - this->state_start_ms_) >= this->power_up_time_ms_) {
-        ESP_LOGD(TAG, "Power-up complete, reading data...");
+        // Log pin states before reading for diagnostics
+        bool clock_state = this->clock_pin_->digital_read();
+        bool data_state = this->data_pin_->digital_read();
+        ESP_LOGD(TAG, "Power-up complete. Clock pin: %d, Data pin: %d (before read)",
+                 clock_state, data_state);
         this->set_state_(ReadState::READING);
       }
       break;
@@ -153,18 +157,25 @@ void BadgerMeterComponent::read_data_() {
 
   // Sync: clock bits until we see a start bit (0).
   // The meter sends idle (1) bits before the first character.
-  // Allow up to 200 idle bits (~200ms) before giving up.
-  static const int MAX_SYNC_BITS = 200;
+  // Allow up to 500 idle bits (~500ms) before giving up.
+  static const int MAX_SYNC_BITS = 500;
   int sync_count = 0;
+  int zeros_seen = 0;
   for (; sync_count < MAX_SYNC_BITS; sync_count++) {
     bool bit = this->read_bit_();
     if (!bit) {
+      zeros_seen++;
       // Found start bit (0) — begin reading characters
       break;
     }
+    // Log first 20 raw bits for diagnostics
+    if (sync_count < 20) {
+      ESP_LOGD(TAG, "Sync bit %d: %d", sync_count, bit ? 1 : 0);
+    }
   }
   if (sync_count >= MAX_SYNC_BITS) {
-    ESP_LOGW(TAG, "No start bit found after %d bits, meter not responding", MAX_SYNC_BITS);
+    ESP_LOGW(TAG, "No start bit found after %d bits (saw %d zeros), meter not responding",
+             MAX_SYNC_BITS, zeros_seen);
     return;
   }
   ESP_LOGD(TAG, "Synced after %d idle bits", sync_count);
