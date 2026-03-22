@@ -101,8 +101,8 @@ bool BadgerMeterComponent::read_bit_() {
   // 1. Clock LOW - 500us
   // 2. Clock HIGH - wait 70us settle, then sample data
   // 3. Hold HIGH for remaining ~430us
-  // Data pin: HIGH = 1, LOW = 0 (no inversion; line is pulled high at idle,
-  // meter pulls low to signal)
+  // Data pin: open-collector, pulled high at idle. Meter pulls LOW to signal.
+  // Inverted: LOW = 1, HIGH = 0 (per sensus_protocol_lib)
   static const uint32_t HALF_CYCLE_US = 500;
   static const uint32_t SETTLE_US = 70;
 
@@ -110,7 +110,7 @@ bool BadgerMeterComponent::read_bit_() {
   delayMicroseconds(HALF_CYCLE_US);
   this->clock_pin_->digital_write(true);
   delayMicroseconds(SETTLE_US);
-  bool value = this->data_pin_->digital_read();
+  bool value = !this->data_pin_->digital_read();  // Inverted
   delayMicroseconds(HALF_CYCLE_US - SETTLE_US);
   return value;
 }
