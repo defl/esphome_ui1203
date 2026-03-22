@@ -1,0 +1,80 @@
+esphome:
+  name: badger-water-meter
+  friendly_name: Badger Water Meter
+
+esp32:
+  board: esp32dev
+  # Or for ESP8266:
+  # esp8266:
+  #   board: esp01_1m
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+
+ota:
+  platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  ap:
+    ssid: "Badger-Meter-Fallback"
+    password: !secret ap_password
+
+captive_portal:
+
+# Load the external component from local directory
+external_components:
+  - source:
+      type: local
+      path: components
+
+# Badger Meter (Sensus UI-1203 wired protocol)
+# Wiring:
+#   RED wire   -> Clock pin (GPIO output) - also powers the meter
+#   GREEN wire -> Data pin (GPIO input)  - meter data output
+#   BLACK wire -> GND
+badger_meter:
+  id: badger_meter_component
+  clock_pin: GPIO16
+  data_pin: GPIO17
+  power_up_time: 3s  # Time to wait after powering meter before reading
+
+sensor:
+  - platform: badger_meter
+    meter_reading:
+      name: "Water Meter Reading"
+      # If your meter reports in gallons, convert to m3:
+      # filters:
+      #   - multiply: 0.00378541  # gallons to m3
+      # If your meter reports in 10s of gallons:
+      # filters:
+      #   - multiply: 0.0378541
+    raw_value:
+      name: "Water Meter Raw Value"
+
+text_sensor:
+  - platform: badger_meter
+    raw_string:
+      name: "Water Meter Raw String"
+    meter_id:
+      name: "Water Meter ID"
+
+# Optional: button to trigger a manual read
+button:
+  - platform: template
+    name: "Read Water Meter"
+    on_press:
+      - lambda: |-
+          id(badger_meter_component).request_read();
+
+# Optional: interval-based reading override
+# interval:
+#   - interval: 5min
+#     then:
+#       - lambda: |-
+#           id(badger_meter_component).request_read();

@@ -1,0 +1,14 @@
+# ESPHome build artifacts
+.esphome/
+__pycache__/
+*.pyc
+
+# Secrets
+secrets.yaml
+
+# IDE
+.vscode/
+.idea/
+
+# Claude
+.claude/
