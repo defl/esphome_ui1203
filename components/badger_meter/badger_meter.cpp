@@ -91,13 +91,14 @@ void BadgerMeterComponent::loop() {
 }
 
 void BadgerMeterComponent::power_up_() {
-  // Apply power via the clock line
-  this->clock_pin_->digital_write(true);
+  // In passive capture mode, meter is powered externally (5V on RED, GND on BLACK).
+  // No clock toggling needed. This is a no-op but kept for state machine compatibility.
+  ESP_LOGD(TAG, "Passive mode: meter should be externally powered (5V on RED, GND on BLACK)");
 }
 
 void BadgerMeterComponent::power_down_() {
-  // Remove power - meter resets after ~1 second without power
-  this->clock_pin_->digital_write(false);
+  // In passive capture mode, we don't control power.
+  ESP_LOGD(TAG, "Passive mode: power-down is a no-op");
 }
 
 bool BadgerMeterComponent::read_bit_() {
@@ -155,32 +156,131 @@ uint8_t BadgerMeterComponent::read_byte_(bool &ok) {
 void BadgerMeterComponent::read_data_() {
   this->read_buffer_.clear();
 
-  // Diagnostic mode: read raw bits and log them so we can determine
-  // the correct framing and inversion from real hardware.
-  static const int DIAG_BITS = 100;
-  bool raw_bits[DIAG_BITS];
-  for (int i = 0; i < DIAG_BITS; i++) {
-    raw_bits[i] = this->data_pin_->digital_read();
-    // Clock cycle
-    this->clock_pin_->digital_write(false);
-    delayMicroseconds(500);
-    this->clock_pin_->digital_write(true);
-    delayMicroseconds(500);
-  }
+  // HIGH-RESOLUTION PASSIVE SIGNAL CAPTURE
+  // No clock toggling - just observe the data pin and record every transition
+  // with microsecond timestamps. This tells us exactly what the meter is sending.
+  //
+  // With 5V on RED and GND on BLACK, the meter free-runs.
+  // We capture transitions on WHITE (data pin) to determine the actual protocol.
 
-  // Log as groups of 10 (one frame per line)
-  for (int i = 0; i < DIAG_BITS; i += 10) {
-    int remaining = DIAG_BITS - i;
-    if (remaining >= 10) {
-      ESP_LOGI(TAG, "Bits %2d-%2d: %d %d %d %d %d %d %d %d %d %d",
-               i, i + 9,
-               raw_bits[i], raw_bits[i+1], raw_bits[i+2], raw_bits[i+3], raw_bits[i+4],
-               raw_bits[i+5], raw_bits[i+6], raw_bits[i+7], raw_bits[i+8], raw_bits[i+9]);
+  static const int MAX_TRANSITIONS = 200;
+  struct Transition {
+    uint32_t timestamp_us;  // micros() value
+    bool level;             // pin state after transition
+  };
+  Transition transitions[MAX_TRANSITIONS];
+  int num_transitions = 0;
+
+  // Capture duration: 200ms should cover several frames at any reasonable baud rate
+  static const uint32_t CAPTURE_DURATION_US = 200000;
+
+  // Record initial state
+  bool last_level = this->data_pin_->digital_read();
+  uint32_t start_us = micros();
+  transitions[0].timestamp_us = start_us;
+  transitions[0].level = last_level;
+  num_transitions = 1;
+
+  ESP_LOGI(TAG, "=== SIGNAL CAPTURE START (200ms, max %d transitions) ===", MAX_TRANSITIONS);
+  ESP_LOGI(TAG, "Initial pin state: %d", last_level);
+
+  // Tight polling loop - sample as fast as possible
+  while ((micros() - start_us) < CAPTURE_DURATION_US && num_transitions < MAX_TRANSITIONS) {
+    bool current = this->data_pin_->digital_read();
+    if (current != last_level) {
+      transitions[num_transitions].timestamp_us = micros();
+      transitions[num_transitions].level = current;
+      num_transitions++;
+      last_level = current;
     }
   }
 
-  // Don't try to parse yet — just collect raw data
-  ESP_LOGI(TAG, "Raw bit dump complete. Analyze to determine framing and inversion.");
+  uint32_t elapsed_us = micros() - start_us;
+  ESP_LOGI(TAG, "Captured %d transitions in %u us", num_transitions, elapsed_us);
+
+  if (num_transitions <= 1) {
+    ESP_LOGW(TAG, "No transitions detected! Pin stuck at %d", transitions[0].level);
+    ESP_LOGW(TAG, "Check wiring: WHITE wire to data pin, 5V to RED, GND to BLACK");
+    return;
+  }
+
+  // Log all transitions with delta times
+  ESP_LOGI(TAG, "--- Transition log (delta_us, level) ---");
+  for (int i = 1; i < num_transitions; i++) {
+    uint32_t delta = transitions[i].timestamp_us - transitions[i-1].timestamp_us;
+    ESP_LOGI(TAG, "  T%3d: +%6u us -> %d  (%s for %u us)",
+             i, delta, transitions[i].level,
+             transitions[i-1].level ? "HIGH" : "LOW",
+             delta);
+  }
+
+  // Compute statistics on HIGH and LOW pulse durations
+  uint32_t min_high = UINT32_MAX, max_high = 0, sum_high = 0, count_high = 0;
+  uint32_t min_low = UINT32_MAX, max_low = 0, sum_low = 0, count_low = 0;
+
+  for (int i = 1; i < num_transitions; i++) {
+    uint32_t delta = transitions[i].timestamp_us - transitions[i-1].timestamp_us;
+    if (transitions[i-1].level) {
+      // Was HIGH for this duration
+      if (delta < min_high) min_high = delta;
+      if (delta > max_high) max_high = delta;
+      sum_high += delta;
+      count_high++;
+    } else {
+      // Was LOW for this duration
+      if (delta < min_low) min_low = delta;
+      if (delta > max_low) max_low = delta;
+      sum_low += delta;
+      count_low++;
+    }
+  }
+
+  ESP_LOGI(TAG, "--- Pulse statistics ---");
+  if (count_high > 0) {
+    ESP_LOGI(TAG, "HIGH pulses: count=%u, min=%u us, max=%u us, avg=%u us",
+             count_high, min_high, max_high, sum_high / count_high);
+  }
+  if (count_low > 0) {
+    ESP_LOGI(TAG, "LOW pulses:  count=%u, min=%u us, max=%u us, avg=%u us",
+             count_low, min_low, max_low, sum_low / count_low);
+  }
+
+  // Estimate frequency
+  if (num_transitions >= 3) {
+    uint32_t total_us = transitions[num_transitions-1].timestamp_us - transitions[0].timestamp_us;
+    float cycles = (num_transitions - 1) / 2.0f;
+    float freq = cycles / (total_us / 1000000.0f);
+    ESP_LOGI(TAG, "Estimated frequency: %.1f Hz", freq);
+
+    // Check for multiple distinct pulse widths (suggests data encoding)
+    // Bucket pulse durations and look for clusters
+    ESP_LOGI(TAG, "--- Pulse width histogram (LOW pulses) ---");
+    // Simple histogram: count pulses in 100us buckets
+    static const int NUM_BUCKETS = 20;
+    static const uint32_t BUCKET_SIZE = 500;  // 500us per bucket
+    int low_buckets[NUM_BUCKETS] = {};
+    int high_buckets[NUM_BUCKETS] = {};
+
+    for (int i = 1; i < num_transitions; i++) {
+      uint32_t delta = transitions[i].timestamp_us - transitions[i-1].timestamp_us;
+      int bucket = delta / BUCKET_SIZE;
+      if (bucket >= NUM_BUCKETS) bucket = NUM_BUCKETS - 1;
+      if (transitions[i-1].level)
+        high_buckets[bucket]++;
+      else
+        low_buckets[bucket]++;
+    }
+
+    for (int b = 0; b < NUM_BUCKETS; b++) {
+      if (low_buckets[b] > 0 || high_buckets[b] > 0) {
+        ESP_LOGI(TAG, "  %5u-%5u us: LOW=%d, HIGH=%d",
+                 b * BUCKET_SIZE, (b + 1) * BUCKET_SIZE,
+                 low_buckets[b], high_buckets[b]);
+      }
+    }
+  }
+
+  ESP_LOGI(TAG, "=== SIGNAL CAPTURE END ===");
 }
 
 void BadgerMeterComponent::parse_data_(const std::string &data) {

@@ -1,0 +1,564 @@
+# Board is a Eletechsup es32d26-2ao-8ai-8di-8do
+# ESP32 board is unknown but chip is ESP32 rev3.1, 2 core(s)
+substitutions:
+  device_name: "whr-esphome"
+  friendly_name: "Water Heater Room ESPHome"
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  # Tried to not have the relays toggle at sartups
+  # For extra safety, you can also add a delay at boot so your relays don't switch all at once
+  on_boot:
+    priority: -10
+    then:
+      - delay: 1s
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    advanced:
+      minimum_chip_revision: "3.1"
+logger:
+  baud_rate: 0  # 0 = disable (AI: to free GPIO1/GPIO3 for RS485)
+api:
+  encryption:
+    key: !secret api_encryption_key
+ota:
+  - platform: esphome
+    password: !secret ota_password
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  fast_connect: true  # For hidden SSID
+  ap:
+    ssid: "${device_name} FB"
+    password: !secret fallback_ap_password
+  power_save_mode: none
+captive_portal:
+
+# Badger water meter (Sensus UI-1203 wired protocol)
+# Wiring (high-side switching):
+#   RED wire   -> GPIO4 (clock/power)
+#   GREEN wire -> GPIO6 (data, open-collector)
+#   BLACK wire -> GND
+external_components:
+  - source:
+      type: git
+      url: https://github.com/defl/esphome_ui1203
+      ref: main
+    components: [badger_meter]
+
+badger_meter:
+  id: badger_meter_component
+  clock_pin: GPIO4
+  data_pin:
+    number: GPIO6
+    mode:
+      input: true
+      pullup: true
+  power_up_time: 3s
+
+one_wire:
+  - platform: gpio
+    pin: GPIO19
+# RELAY OUTPUTS (CH1-CH8)
+sn74hc595:
+  - id: relay_shift
+    data_pin: GPIO12
+    clock_pin: GPIO22
+    latch_pin: GPIO23
+    oe_pin: GPIO13
+    sr_count: 1
+# DIGITAL INPUTS (IN1-IN8)
+sn74hc165:
+  - id: input_hub
+    data_pin: GPIO15
+    clock_pin: GPIO2
+    load_pin: GPIO0
+    sr_count: 1
+switch:
+  # Relay 1
+  - platform: gpio
+    name: "${friendly_name} air valves power"
+    id: air_valve_power
+    pin:
+      sn74hc595: relay_shift
+      number: 0
+      inverted: false
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  # Relay 2
+  - platform: gpio
+    name: "${friendly_name} air valves inside/outside"
+    id: air_valve_insideoutside
+    pin:
+      sn74hc595: relay_shift
+      number: 1
+      inverted: false
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  # Relay 3
+  - platform: gpio
+    name: "${friendly_name} water valve dump"
+    id: water_valve_dump
+    pin:
+      sn74hc595: relay_shift
+      number: 2
+      inverted: false
+    restore_mode: RESTORE_DEFAULT_OFF
+  # Relay 4 & 5 removed for brevity
+  # Relay 6
+  - platform: gpio
+    name: "${friendly_name} water valve open"
+    id: water_valve_open
+    pin:
+      sn74hc595: relay_shift
+      number: 5
+      inverted: false
+    interlock: [water_valve_close]
+    interlock_wait_time: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+
+    # Relay 7
+  - platform: gpio
+    name: "${friendly_name} water valve close"
+    id: water_valve_close
+    pin:
+      sn74hc595: relay_shift
+      number: 6
+      inverted: false
+    interlock: [water_valve_open]
+    interlock_wait_time: 1s
+    restore_mode: RESTORE_DEFAULT_OFF
+
+    # Relay 8
+  - platform: gpio
+    id: relay_8
+    name: "${friendly_name} water pipe heater"
+    pin:
+      sn74hc595: relay_shift
+      number: 7
+      inverted: false
+    restore_mode: RESTORE_DEFAULT_OFF
+button:
+  - platform: template
+    name: "${friendly_name} Trigger water pressure too high script"
+    on_press:
+      - script.execute: water_pressure_too_high_script
+  - platform: template
+    name: "${friendly_name} Trigger check close dump script"
+    on_press:
+      - script.execute: water_pressure_check_close_dump_script
+  - platform: template
+    name: "${friendly_name} Trigger water open safe"
+    on_press:
+      - script.execute: water_open_safe
+  - platform: template
+    name: "${friendly_name} Read Water Meter"
+    on_press:
+      - lambda: |-
+          id(badger_meter_component).request_read();
+binary_sensor:
+  - platform: gpio
+    id: water_valve_is_closed
+    name: "${friendly_name} Valve closed"
+    pin:
+      sn74hc165: input_hub
+      number: 0
+      inverted: true  # NPN active LOW
+    filters:
+      - delayed_on: 10ms
+      - delayed_off: 10ms
+    on_press: # off->on transition
+      then:
+        - logger.log: "Valve reached CLOSED limit"
+        - switch.turn_off: water_valve_open
+        - switch.turn_off: water_valve_close
+
+  - platform: gpio
+    id: water_valve_is_open
+    name: " ${friendly_name} Valve open"
+    pin:
+      sn74hc165: input_hub
+      number: 1
+      inverted: true
+    filters:
+      - delayed_on: 10ms
+      - delayed_off: 10ms
+    on_press: # off->on transition
+      then:
+        - logger.log: "Valve reached OPEN limit"
+        - switch.turn_off: water_valve_open
+        - switch.turn_off: water_valve_close
+
+  - platform: gpio
+    id: digital_input_3
+    name: " ${friendly_name} Stop Button"
+    pin:
+      sn74hc165: input_hub
+      number: 2
+      inverted: false  # This is NC button, inverted the inverted
+    filters:
+      - delayed_on: 10ms
+      - delayed_off: 10ms
+    on_press:
+      then:
+        - script.execute: water_pressure_check_close_dump_script
+  - platform: gpio
+    id: digital_input_4
+    name: " ${friendly_name} Start Button"
+    pin:
+      sn74hc165: input_hub
+      number: 3
+      inverted: true
+    filters:
+      - delayed_on: 10ms
+      - delayed_off: 10ms
+    on_press:
+      then:
+        - script.execute: water_open_safe
+  # Removed Input 3-8 for brivity, they just follow the number: <x+1> pattern
+  # Special sensor that becomes true if the dump valve has been open for a minimal amount of time
+  # this is used in the scripts below to ensure there is no fast feeback loop
+  - platform: template
+    id: dump_valve_open_delayed_sensor
+    name: "${friendly_name} Dump Valve Open Sensor"
+    lambda: |-
+      return id(water_valve_dump).state;
+    filters:
+      - delayed_on: 2s   # only becomes true if valve is on for given time
+      - delayed_off: 0ms
+  - platform: template
+    name: "${friendly_name} Water Valve Fault"
+    lambda: |-
+      return id(water_valve_is_closed).state && id(water_valve_is_open).state;
+  # Status sensor
+  - platform: status
+    name: "${friendly_name} Status"
+# =============================================================================
+# ANALOG VOLTAGE INPUTS (Vi1-Vi4: 0-10V)
+# Pins: GPIO14, GPIO33, GPIO27, GPIO32
+# =============================================================================
+# Board uses voltage dividers to scale 0-10V down to ESP32 ADC range (0-3.3V)
+# Typical divider: 10k + 43k gives ratio of 5.3x
+sensor:
+  # Badger water meter sensors
+  - platform: badger_meter
+    meter_reading:
+      name: "${friendly_name} Water Meter Reading"
+      icon: "mdi:water"
+    raw_value:
+      name: "${friendly_name} Water Meter Raw Value"
+  # Vin1
+  - platform: adc
+    id: voltage_input_1
+    name: "${friendly_name} Pressure In"  # Measured before water valve, right behind blue PEX
+    pin: GPIO14  # This is on ADC block 2, wifi conflicts
+    attenuation: 12db
+    update_interval: 5s
+    accuracy_decimals: 1
+    unit_of_measurement: "PSI"
+    device_class: "pressure"
+    filters:
+      - lambda: return x * (10.0 + 43.0) / 10.0;
+      # - sliding_window_moving_average:
+      #     window_size: 10
+      #     send_every: 1
+      - calibrate_linear:
+          method: least_squares
+          datapoints:
+            # V           PSI
+            - 0.458438 ->   0
+            - 0.812250 ->  13
+            - 1.787438 ->  50
+            - 4.5      -> 150  # assumed
+      - clamp:
+          min_value: -1
+          max_value: 151
+    on_value_range:
+      - above: 80.0
+        then:
+          - script.execute: water_pressure_too_high_script
+  # Vin 2
+  - platform: adc
+    id: voltage_input_2
+    name: "${friendly_name} Pressure Post Filter"  # Measured after filters, before decalcifier
+    pin: GPIO33
+    attenuation: 12db
+    update_interval: 1s
+    accuracy_decimals: 1
+    unit_of_measurement: "PSI"
+    device_class: "pressure"
+    filters:
+      - lambda: return x * (10.0 + 43.0) / 10.0;
+      # - sliding_window_moving_average:
+      #     window_size: 10
+      #     send_every: 1
+      - calibrate_linear:
+          method: least_squares
+          datapoints:
+            # V           PSI
+            - 0.458438 ->   0
+            - 0.812250 ->  13
+            - 1.787438 ->  50
+            - 4.5      -> 150  # assumed
+      - clamp:
+          min_value: -1
+          max_value: 151
+    on_value_range:
+      - above: 80.0
+        then:
+          - script.execute: water_pressure_too_high_script
+
+  # Vin3
+  - platform: adc
+    id: voltage_input_3
+    name: "${friendly_name} Pressure Cold"  # After softner, this is what feeds cold water directly
+    pin: GPIO27  # This is on ADC block 2, wifi conflicts
+    attenuation: 12db
+    update_interval: 5s
+    accuracy_decimals: 1
+    unit_of_measurement: "PSI"
+    device_class: "pressure"
+    filters:
+      - lambda: return x * (10.0 + 43.0) / 10.0;
+      # - sliding_window_moving_average:
+      #     window_size: 10
+      #     send_every: 1
+      - calibrate_linear:
+          method: least_squares
+          datapoints:
+            # V           PSI
+            - 0.458438 ->   0
+            - 0.812250 ->  13
+            - 1.787438 ->  50
+            - 4.5      -> 150  # assumed
+      - clamp:
+          min_value: -1
+          max_value: 151
+    on_value_range:
+      - above: 80.0
+        then:
+          - script.execute: water_pressure_too_high_script
+
+    # Vin4
+  - platform: adc
+    id: voltage_input_4
+    name: "${friendly_name} Pressure Hot" # After one-way valve
+    pin: GPIO32
+    attenuation: 12db
+    update_interval: 1s
+    accuracy_decimals: 1
+    unit_of_measurement: "PSI"
+    device_class: "pressure"
+    filters:
+      - lambda: return x * (10.0 + 43.0) / 10.0;
+      # - sliding_window_moving_average:
+      #     window_size: 10
+      #     send_every: 1
+      - calibrate_linear:
+          method: least_squares
+          datapoints:
+            # V           PSI
+            - 0.458438 ->   0
+            - 0.812250 ->  13
+            - 1.787438 ->  50
+            - 4.5      -> 150  # assumed
+      - clamp:
+          min_value: -1
+          max_value: 151
+    on_value_range:
+      - above: 80.0
+        then:
+          - script.execute: water_pressure_too_high_script
+  - platform: dallas_temp
+    address: 0x6f7e73d445d10028
+    id: boiler_egress_water_temp
+    name: "${friendly_name} boiler egress water temp"
+  - platform: dallas_temp
+    address: 0xa12b6c6e1f64ff28
+    id: boiler_ingress_water_temp
+    name: "${friendly_name} boiler ingress water temp"
+  - platform: dallas_temp
+    address: 0xeb1a6a6e1f64ff28
+    id: attic_pipe_water_temp
+    name: "${friendly_name} attic pipe water temp"
+  - platform: dallas_temp
+    address: 0x66dd6b6e1f64ff28
+    id: boiler_ingress_air_temp
+    name: "${friendly_name} boiler ingress air temp"
+  - platform: dallas_temp
+    address: 0x9a1bb46f1f64ff28
+    id: outside_wall_pipe_water_temp
+    name: "${friendly_name} outside wall pipe water temp"
+  - platform: wifi_signal
+    name: "${friendly_name} WiFi Signal"
+    update_interval: 60s
+  - platform: uptime
+    name: "${friendly_name} Uptime"
+    id: uptime_sec
+    update_interval: 120s
+# =============================================================================
+# RS485 UART INTERFACE
+# Pins: GPIO1 (TX), GPIO3 (RX), GPIO21 (DE/RE direction control)
+# =============================================================================
+# uart:
+#   id: uart_rs485
+#   tx_pin: GPIO1
+#   rx_pin: GPIO3
+#   baud_rate: 9600
+#   data_bits: 8
+#   parity: NONE
+#   stop_bits: 1
+# Uncomment for Modbus RTU support:
+# modbus:
+#   id: modbus1
+#   uart_id: uart_rs485
+#   flow_control_pin: GPIO21
+# modbus_controller:
+#   - id: modbus_device_1
+#     address: 0x01
+#     modbus_id: modbus1
+#     setup_priority: -10
+#     update_interval: 5s
+text_sensor:
+  - platform: badger_meter
+    raw_string:
+      name: "${friendly_name} Water Meter Raw String"
+    meter_id:
+      name: "${friendly_name} Water Meter ID"
+  - platform: wifi_info
+    ip_address:
+      name: "${friendly_name} IP"
+    ssid:
+      name: "${friendly_name} SSID"
+    bssid:
+      name: "${friendly_name} BSSID"
+# The motor for the air valves is a cover in ESPHome.
+# For added safety we pull the power from the motor and all relays after it has completed it's action.
+cover:
+  - platform: template
+    id: template_damper
+    name: "${friendly_name} air valves"
+    device_class: damper
+    open_action:
+      - switch.turn_on: air_valve_insideoutside  # on=outside TODO
+      - delay: 500ms  # Give relay some time
+      - switch.turn_on: air_valve_power
+      - delay: 20s  # Measured TODO
+      - switch.turn_off: air_valve_power
+      - delay: 500ms  # Give relay some time
+      - switch.turn_off: air_valve_insideoutside
+    close_action:
+      - switch.turn_off: air_valve_insideoutside  # off=inside TODO
+      - delay: 500ms  # Give relay some time
+      - switch.turn_on: air_valve_power
+      - delay: 20s  # Measured TODO
+      - switch.turn_off: air_valve_power
+      - delay: 500ms  # Give relay some time
+      - switch.turn_off: air_valve_insideoutside
+    stop_action:
+      - switch.turn_off: air_valve_power
+      - delay: 500ms  # Give relay some time
+      - switch.turn_off: air_valve_insideoutside
+    optimistic: true
+  - platform: template
+    id: template_water_valve
+    name: "${friendly_name} water valve"
+    device_class: damper
+    lambda: |-
+      if (id(water_valve_is_open).state) {
+        return COVER_OPEN;
+      } else if (id(water_valve_is_closed).state) {
+        return COVER_CLOSED;
+      } else {
+        return COVER_OPERATION_IDLE;
+      }
+    open_action:
+      - switch.turn_off: water_valve_close
+      - delay: 510ms
+      - switch.turn_on: water_valve_open
+      - delay: 7000ms
+      - switch.turn_off: water_valve_open
+    close_action:
+      - script.execute:  water_valve_close_script
+    stop_action:
+      - switch.turn_off: water_valve_close
+      - delay: 510ms
+      - switch.turn_off: water_valve_open
+script:
+  # Script optimized for not waiting if not needed
+  - id: water_valve_close_script
+    mode: single
+    then:
+      - if:
+          condition:
+            switch.is_on: water_valve_open
+          then:
+            - switch.turn_off: water_valve_open
+            - delay: 510ms
+      - switch.turn_on: water_valve_close
+      - delay: 7000ms
+      - switch.turn_off: water_valve_close
+  # Script that gets triggered when water pressure is too high
+  - id: water_pressure_too_high_script
+    mode: single
+    then:
+      # Start dumping water first to prevent pressure build-up
+      - switch.turn_on: water_valve_dump
+      # WARNING: THIS WILL WAIT FOR THE MOTOR TO FINISH, RUN LAST
+      - cover.close:  template_water_valve
+  # Script that executes on a timer and will close the dump valve if the pressure is back to reasonable
+  # range.
+  - id: water_pressure_check_close_dump_script
+    then:
+      - if:
+          condition:
+            and:
+              # Dump valve open for minium time
+              - binary_sensor.is_on:
+                  dump_valve_open_delayed_sensor
+              # WARNING: it's an easy idea to add a condition to only do this if the water valve
+              #          is closed. That means that on failure it will never close and burn out.
+              #          Don't do it.
+              # ALL pressures in safe ranges
+              - sensor.in_range:
+                  id: voltage_input_1
+                  above: -1    # ignore negative errors
+                  below: 60
+              - sensor.in_range:
+                  id: voltage_input_2
+                  above: -1
+                  below: 60
+              - sensor.in_range:
+                  id: voltage_input_3
+                  above: -1
+                  below: 60
+              - sensor.in_range:
+                  id: voltage_input_4
+                  above: -1
+                  below: 60
+          then:
+            - switch.turn_off: water_valve_dump
+  # Script that will open the water valve if values are sane.
+  - id: water_open_safe
+    then:
+      - if:
+          condition:
+            and:
+              # Don't open with the dump valve is open
+              - switch.is_off:
+                  water_valve_dump
+              # The 100PSI mecahnical dump valve should bring this to within reasonable numbers,
+              # pressure can still be high as there is a one-way valve from the street so no way
+              # for pressure to reduce
+              - sensor.in_range:
+                  id: voltage_input_1
+                  above: -1    # ignore negative errors
+                  below: 110
+          then:
+            - cover.open: template_water_valve
+interval:
+  - interval: 1s
+    then:
+      - script.execute: water_pressure_check_close_dump_script
