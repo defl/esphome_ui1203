@@ -46,8 +46,9 @@ void BadgerMeterComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "  Clock/power pin: not set — meter is externally powered");
   }
   LOG_PIN("  Data Pin: ", this->data_pin_);
-  ESP_LOGCONFIG(TAG, "  Mode: %s, bit period: %u us",
-                this->mode_ == ReadMode::CLOCKED ? "clocked" : "passive", this->bit_period_us_);
+  ESP_LOGCONFIG(TAG, "  Mode: %s, bit period: %u us, reset hold: %u ms",
+                this->mode_ == ReadMode::CLOCKED ? "clocked" : "passive", this->bit_period_us_,
+                this->reset_hold_ms_);
   ESP_LOGCONFIG(TAG, "  Capture window: %u ms, idle gap: %u ms, interval: %u ms",
                 this->capture_window_ms_, this->idle_gap_ms_, this->update_interval_ms_);
   if (this->meter_reading_sensor_)
@@ -79,9 +80,10 @@ void BadgerMeterComponent::loop() {
             this->last_read_ms_ = now;
             break;
           }
-          this->clock_pin_->digital_write(true);
-          ESP_LOGD(TAG, "Powering the meter for %u ms before clocking", this->power_up_time_ms_);
-          this->set_state_(ReadState::POWER_UP);
+          this->clock_pin_->digital_write(false);
+          ESP_LOGD(TAG, "Holding the meter unpowered for %u ms to reset its send buffer",
+                   this->reset_hold_ms_);
+          this->set_state_(ReadState::RESET);
           break;
         }
         this->armed_level_ = this->data_pin_->digital_read();
@@ -107,6 +109,15 @@ void BadgerMeterComponent::loop() {
         this->num_transitions_ = 0;
         this->last_read_ms_ = now;
         this->set_state_(ReadState::IDLE);
+      }
+      break;
+    }
+
+    case ReadState::RESET: {
+      if ((now - this->state_start_ms_) >= this->reset_hold_ms_) {
+        this->clock_pin_->digital_write(true);
+        ESP_LOGD(TAG, "Powering the meter for %u ms before clocking", this->power_up_time_ms_);
+        this->set_state_(ReadState::POWER_UP);
       }
       break;
     }

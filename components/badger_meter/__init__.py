@@ -14,6 +14,7 @@ CONF_IDLE_GAP = "idle_gap"
 CONF_READ_INTERVAL = "read_interval"
 CONF_MODE = "mode"
 CONF_BIT_PERIOD = "bit_period"
+CONF_RESET_HOLD = "reset_hold"
 
 badger_meter_ns = cg.esphome_ns.namespace("badger_meter")
 BadgerMeterComponent = badger_meter_ns.class_("BadgerMeterComponent", cg.Component)
@@ -39,6 +40,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_READ_INTERVAL, default="60s"): cv.positive_time_period_milliseconds,
         cv.Optional(CONF_MODE, default="passive"): cv.enum(MODES, lower=True),
         cv.Optional(CONF_BIT_PERIOD, default="1000us"): cv.positive_time_period_microseconds,
+        cv.Optional(CONF_RESET_HOLD, default="1200ms"): cv.positive_time_period_milliseconds,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -60,3 +62,4 @@ async def to_code(config):
     cg.add(var.set_read_interval(config[CONF_READ_INTERVAL]))
     cg.add(var.set_mode(config[CONF_MODE]))
     cg.add(var.set_bit_period(config[CONF_BIT_PERIOD]))
+    cg.add(var.set_reset_hold(config[CONF_RESET_HOLD]))

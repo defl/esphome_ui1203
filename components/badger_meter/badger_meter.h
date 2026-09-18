@@ -18,6 +18,7 @@ enum class ReadState : uint8_t {
   IDLE,
   ARMED,
   CAPTURE,
+  RESET,
   POWER_UP,
   CLOCK,
   PARSE,
@@ -78,6 +79,7 @@ class BadgerMeterComponent : public Component {
   void set_read_interval(uint32_t ms) { this->update_interval_ms_ = ms; }
   void set_mode(ReadMode mode) { this->mode_ = mode; }
   void set_bit_period(uint32_t us) { this->bit_period_us_ = us; }
+  void set_reset_hold(uint32_t ms) { this->reset_hold_ms_ = ms; }
 
   void set_meter_reading_sensor(sensor::Sensor *sensor) { this->meter_reading_sensor_ = sensor; }
   void set_raw_value_sensor(sensor::Sensor *sensor) { this->raw_value_sensor_ = sensor; }
@@ -113,6 +115,9 @@ class BadgerMeterComponent : public Component {
 
   ReadMode mode_{ReadMode::PASSIVE};
   uint32_t bit_period_us_{1000};
+  // kmeter: holding the clock low for about a second resets the register's send buffer, which
+  // is how a read starts at the beginning of the message rather than part-way through it.
+  uint32_t reset_hold_ms_{1200};
 
   // Clocked mode: one sampled bit per power cycle.
   static const int MAX_CLOCK_BITS = 400;
