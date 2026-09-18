@@ -139,6 +139,7 @@ class BadgerMeterComponent : public Component {
   text_sensor::TextSensor *raw_string_sensor_{nullptr};
   text_sensor::TextSensor *meter_id_sensor_{nullptr};
 
+  void scan_pins_();
   void capture_();
   void clock_bits_();
   void report_();
