@@ -9,6 +9,9 @@ MULTI_CONF = False
 CONF_CLOCK_PIN = "clock_pin"
 CONF_DATA_PIN = "data_pin"
 CONF_POWER_UP_TIME = "power_up_time"
+CONF_CAPTURE_WINDOW = "capture_window"
+CONF_IDLE_GAP = "idle_gap"
+CONF_READ_INTERVAL = "read_interval"
 
 badger_meter_ns = cg.esphome_ns.namespace("badger_meter")
 BadgerMeterComponent = badger_meter_ns.class_("BadgerMeterComponent", cg.Component)
@@ -16,9 +19,15 @@ BadgerMeterComponent = badger_meter_ns.class_("BadgerMeterComponent", cg.Compone
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(BadgerMeterComponent),
-        cv.Required(CONF_CLOCK_PIN): pins.gpio_output_pin_schema,
+        # Optional on purpose. Configured, the pin is driven HIGH to power the meter; omitted,
+        # it is never touched — which is what a meter on its own supply needs, since an output
+        # pin defaults LOW and would short that supply to ground.
+        cv.Optional(CONF_CLOCK_PIN): pins.gpio_output_pin_schema,
         cv.Required(CONF_DATA_PIN): pins.gpio_input_pin_schema,
         cv.Optional(CONF_POWER_UP_TIME, default="3s"): cv.positive_time_period_milliseconds,
+        cv.Optional(CONF_CAPTURE_WINDOW, default="1200ms"): cv.positive_time_period_milliseconds,
+        cv.Optional(CONF_IDLE_GAP, default="250ms"): cv.positive_time_period_milliseconds,
+        cv.Optional(CONF_READ_INTERVAL, default="60s"): cv.positive_time_period_milliseconds,
     }
 ).extend(cv.COMPONENT_SCHEMA)
 
@@ -27,10 +36,14 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
 
-    clock_pin = await cg.gpio_pin_expression(config[CONF_CLOCK_PIN])
-    cg.add(var.set_clock_pin(clock_pin))
+    if CONF_CLOCK_PIN in config:
+        clock_pin = await cg.gpio_pin_expression(config[CONF_CLOCK_PIN])
+        cg.add(var.set_clock_pin(clock_pin))
 
     data_pin = await cg.gpio_pin_expression(config[CONF_DATA_PIN])
     cg.add(var.set_data_pin(data_pin))
 
     cg.add(var.set_power_up_time(config[CONF_POWER_UP_TIME]))
+    cg.add(var.set_capture_window(config[CONF_CAPTURE_WINDOW]))
+    cg.add(var.set_idle_gap(config[CONF_IDLE_GAP]))
+    cg.add(var.set_read_interval(config[CONF_READ_INTERVAL]))

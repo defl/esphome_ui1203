@@ -1,57 +1,68 @@
 # Badger Water Meter ESPHome Component
 
-ESPHome external component for reading Badger water meters via the **Sensus UI-1203** wired encoder protocol.
+ESPHome external component for reading Badger water meters over the **Sensus UI-1203** wired
+encoder interface.
+
+> **Status: diagnostic.** No reading has been decoded from real hardware yet. The component
+> captures the data line and tries to decode it; the framing below is what the reference
+> implementations use, not something a vendor datasheet confirmed. See "What is actually known".
 
 ## Hardware
 
-Any ESP32 or ESP8266 board with 2 available GPIO pins. The meter runs at 3.3V.
+Any ESP32 or ESP8266 board with one free GPIO for data, plus a second one only if the ESP is to
+power the meter.
 
 ## Wiring
 
-The meter has a 3-wire encoder output. The "clock" is achieved by toggling
-power to the meter — each power cycle clocks out one bit. You can toggle
-from either the high side or the low side:
+The encoder has three wires:
 
-### Option A: High-side switching (ESP32 or boards without boot-pin constraints)
+| Wire | Function | Connect to |
+|------|----------|-----------|
+| RED | Power (and, in the clocked interpretation, clock) | The meter's supply, or an ESP GPIO |
+| WHITE | Data, open-collector | ESP GPIO (input, pull-up) |
+| BLACK | Ground | ESP GND |
 
-| Wire   | Function      | Connect To            |
-|--------|---------------|-----------------------|
-| RED    | Clock / Power | ESP GPIO (output)     |
-| GREEN  | Data          | ESP GPIO (input)      |
-| BLACK  | Ground        | ESP GND               |
+**The data wire on the Badger E-Series is WHITE.** Older revisions of this file said GREEN,
+copied from the reference implementations; that is wrong for this meter.
 
-The `clock_pin` GPIO drives RED. HIGH = meter powered, LOW = meter off.
+**Do not configure `clock_pin` when the meter has its own supply.** An ESPHome output pin
+initialises LOW, so naming the pin would pull the supply rail to ground. Left out of the config
+the pin is never touched. Configured, it is driven HIGH and held there, powering the meter.
 
-### Option B: Low-side switching (ESP8266 / ESP-01)
+**Data line:** open-collector — the meter pulls it low. Use the internal pull-up or a 10k to
+the ESP's rail.
 
-| Wire   | Function      | Connect To            |
-|--------|---------------|-----------------------|
-| RED    | Clock / Power | 3.3V (constant)       |
-| GREEN  | Data          | ESP GPIO0 (input)     |
-| BLACK  | Ground        | ESP GPIO2 (output)    |
+## What is actually known
 
-The `clock_pin` GPIO drives BLACK (ground side). LOW = meter powered,
-HIGH = meter off. This avoids ESP8266 boot issues since GPIO0/GPIO2 are
-pulled high at startup, keeping the meter unpowered during boot.
+- No manufacturer timing or electrical specification is published for this meter.
+- Everything else here comes from [kmeter](https://github.com/rszimm/kmeter) and
+  [sensus_protocol_lib](https://github.com/michlv/sensus_protocol_lib), neither validated
+  against an E-Series ultrasonic.
+- Two readings of the same interface are still open:
+  - **The reader clocks it** — toggling power on RED shifts out one bit per cycle, ~1 ms/bit.
+  - **The meter free-runs** — held powered, it transmits asynchronously (1200 baud ⇒ 833 µs/bit)
+    in bursts separated by seconds of idle.
 
-**Important:** When using Option B, set `inverted: true` on the clock pin
-in your YAML config so the logic is correct.
+  The capture below distinguishes them: edges on a powered, unclocked line mean it free-runs, and
+  the narrowest pulse is one bit time.
+- Framing, as implemented: start (0), 7 data bits LSB-first, even parity, stop (1); ASCII
+  terminated by `\r`; data inverted (LOW = 1) — that last one confirmed on hardware, which
+  rejected kmeter's non-inverted reading with stop-bit errors.
 
-**Data line:** Open-collector — the meter pulls it low to signal a bit.
-Use the internal pull-up or add an external 10k pull-up resistor.
+## How the capture works
 
-## Protocol Summary
+`read_interval` (or the `request_read()` lambda) arms the component. Arming is non-blocking: the
+data pin is sampled once per loop until it moves, for up to 8 s. The first edge starts a blocking
+capture that records every transition with microsecond offsets until the burst ends (an idle gap),
+the window expires, or the buffer fills.
 
-- There is no separate clock signal; power toggling IS the clock
-- Each power cycle (off → on → read data pin) clocks out one bit
-- Each byte: start bit (0) + 7 data bits (LSB first) + even parity + stop bit (1)
-- Meter needs ~3 seconds of continuous power before first transmission
-- Transmits ASCII string terminated by `\r`, e.g. `R226107229550`
-- First digits after 'R' = meter reading, remaining = meter ID
+It then logs the transition list, a 50 µs-bucket pulse-width histogram and the narrowest pulse,
+and tries to decode the capture against every combination of {narrowest pulse, 833, 1000, 416,
+208, 104, 2083 µs} × {inverted, non-inverted} × {7E1, 8N1, 7N1, 8E1}, reporting the one that
+yields the most well-framed printable characters. A successful decode is published to the
+sensors like any other read.
 
 ## Installation
-
-Add this to your ESPHome YAML to use the component directly from GitHub:
 
 ```yaml
 external_components:
@@ -60,24 +71,23 @@ external_components:
       url: https://github.com/defl/esphome_ui1203
       ref: main
     components: [badger_meter]
-```
-
-Or clone the repo and use a local path:
-
-```yaml
-external_components:
-  - source:
-      type: local
-      path: /path/to/esphome_ui1203/components
+    refresh: 0s
 ```
 
 ## Configuration
 
 ```yaml
 badger_meter:
-  clock_pin: GPIO16
-  data_pin: GPIO17
-  power_up_time: 3s   # optional, default 3s
+  id: badger_meter_component
+  data_pin:
+    number: GPIO17
+    mode:
+      input: true
+      pullup: true
+  # clock_pin: GPIO16      # ONLY if the ESP powers the meter — see Wiring
+  capture_window: 1200ms   # hard stop for one capture
+  idle_gap: 250ms          # end the capture this long after the last edge
+  read_interval: 60s
 
 sensor:
   - platform: badger_meter
@@ -96,30 +106,19 @@ text_sensor:
 
 ## Sensors
 
-| Sensor          | Type   | Description                              |
+| Sensor | Type | Description |
 |-----------------|--------|------------------------------------------|
-| `meter_reading` | sensor | Parsed numeric reading from the meter    |
-| `raw_value`     | sensor | Full numeric value (all digits after 'R')|
-| `raw_string`    | text   | Complete raw ASCII string from meter     |
-| `meter_id`      | text   | Meter serial/ID (trailing digits)        |
-
-## Unit Conversion
-
-The raw reading unit depends on your meter's configuration (gallons, cubic feet, cubic meters). Apply filters in YAML:
-
-```yaml
-sensor:
-  - platform: badger_meter
-    meter_reading:
-      name: "Water Usage"
-      filters:
-        - multiply: 0.00378541  # gallons to cubic meters
-```
+| `meter_reading` | sensor | Parsed numeric reading from the meter |
+| `raw_value` | sensor | Full numeric value (all digits after 'R') |
+| `raw_string` | text | Complete decoded ASCII string |
+| `meter_id` | text | Meter serial/ID (trailing digits) |
 
 ## Tuning
 
-- **Reading digits**: The parser defaults to 7 digits for the reading. If your meter uses a different split, edit the `reading_digits` value in `badger_meter.cpp`.
-- **Power-up time**: Some meters need more than 3 seconds. Increase `power_up_time` if you get empty reads.
+- **Reading digits**: the parser defaults to 7 digits for the reading. The split is
+  meter-model-specific and unverified; edit `reading_digits` in `badger_meter.cpp`.
+- **Unit**: gallons, cubic feet or cubic metres depending on the meter's configuration. Apply a
+  `multiply` filter in YAML once a decoded string has established which.
 
 ## License
 
