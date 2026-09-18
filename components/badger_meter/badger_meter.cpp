@@ -29,6 +29,8 @@ static const int HISTOGRAM_BUCKETS = 100;
 // rates the reference implementations use (1200 baud, kmeter's ~1 kHz) and the common faster ones.
 static const uint32_t CANDIDATE_BIT_US[] = {833, 1000, 416, 208, 104, 2083};
 
+static const int SCAN_PINS[] = {4, 16, 17, 25, 26, 34, 35, 36, 39};
+
 void BadgerMeterComponent::scan_pins_() {
 #ifdef USE_ESP_IDF
   // Runs before any pin here is configured. Reads each candidate with the internal pull-up and
@@ -36,8 +38,8 @@ void BadgerMeterComponent::scan_pins_() {
   // 0 both ways is held low, and 1-then-0 is simply floating. That distinguishes "the data wire
   // is not on the pin we think" from "the pin is being held low", which a DMM on the wire and a
   // digital_read() disagreeing cannot.
-  static const int PINS[] = {4, 16, 17, 25, 26, 34, 35, 36, 39};
-  for (int number : PINS) {
+  for (int index = 0; index < SCAN_COUNT; index++) {
+    const int number = SCAN_PINS[index];
     const gpio_num_t pin = static_cast<gpio_num_t>(number);
     gpio_set_direction(pin, GPIO_MODE_INPUT);
     // 34..39 are input-only and carry no internal pull resistors; the calls fail harmlessly and
@@ -49,14 +51,10 @@ void BadgerMeterComponent::scan_pins_() {
     delay(3);
     const int with_pulldown = gpio_get_level(pin);
     gpio_set_pull_mode(pin, GPIO_FLOATING);
-    const char *verdict = "floating";
-    if (with_pullup == 1 && with_pulldown == 1)
-      verdict = "HELD HIGH externally";
-    else if (with_pullup == 0 && with_pulldown == 0)
-      verdict = "HELD LOW externally";
-    ESP_LOGI(TAG, "  pin scan GPIO%-2d: pullup=%d pulldown=%d -> %s", number, with_pullup,
-             with_pulldown, verdict);
+    this->scan_pullup_[index] = with_pullup;
+    this->scan_pulldown_[index] = with_pulldown;
   }
+  this->scanned_ = true;
 #endif
 }
 
@@ -82,6 +80,18 @@ void BadgerMeterComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "  Clock/power pin: not set — meter is externally powered");
   }
   LOG_PIN("  Data Pin: ", this->data_pin_);
+  if (this->scanned_) {
+    for (int index = 0; index < SCAN_COUNT; index++) {
+      const int up = this->scan_pullup_[index], down = this->scan_pulldown_[index];
+      const char *verdict = "floating / unconnected";
+      if (up == 1 && down == 1)
+        verdict = "HELD HIGH externally";
+      else if (up == 0 && down == 0)
+        verdict = "HELD LOW externally";
+      ESP_LOGCONFIG(TAG, "  boot pin scan GPIO%-2d: pullup=%d pulldown=%d -> %s",
+                    SCAN_PINS[index], up, down, verdict);
+    }
+  }
   ESP_LOGCONFIG(TAG, "  Mode: %s, bit period: %u us, reset hold: %u ms",
                 this->mode_ == ReadMode::CLOCKED ? "clocked" : "passive", this->bit_period_us_,
                 this->reset_hold_ms_);

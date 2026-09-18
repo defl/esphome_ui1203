@@ -139,6 +139,14 @@ class BadgerMeterComponent : public Component {
   text_sensor::TextSensor *raw_string_sensor_{nullptr};
   text_sensor::TextSensor *meter_id_sensor_{nullptr};
 
+  // Scan results are kept rather than logged where they are taken: setup() output has already
+  // scrolled away by the time anything attaches to the log stream, while dump_config() is
+  // replayed to every new connection.
+  static const int SCAN_COUNT = 9;
+  int scan_pullup_[SCAN_COUNT]{};
+  int scan_pulldown_[SCAN_COUNT]{};
+  bool scanned_{false};
+
   void scan_pins_();
   void capture_();
   void clock_bits_();
