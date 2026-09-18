@@ -18,12 +18,18 @@ The encoder has three wires:
 
 | Wire | Function | Connect to |
 |------|----------|-----------|
-| RED | Power (and, in the clocked interpretation, clock) | The meter's supply, or an ESP GPIO |
-| WHITE | Data, open-collector | ESP GPIO (input, pull-up) |
+| RED | Power, and the clock — toggling it shifts out bits | 5 V through a switch the ESP drives |
+| GREEN | Data, open-collector | ESP GPIO (input) + external 4.7k–10k pull-up |
 | BLACK | Ground | ESP GND |
 
-**The data wire on the Badger E-Series is WHITE.** Older revisions of this file said GREEN,
-copied from the reference implementations; that is wrong for this meter.
+Those colours are Badger's own, from the HR-E LCD manual's "Encoder Cable with Flying Lead"
+table: `RED - Power`, `GREEN - Data`, `BLACK - Ground`. Badger's documentation uses no white
+conductor anywhere on this meter — its other outputs are scaled (red +, black −), unscaled
+(green +, black −) and 4-20 mA (red, black). **If the cable in front of you has a white wire,
+establish what it is before assuming it is data.**
+
+**RED wants 5 V.** An ESP32 GPIO at 3.3 V is marginal at best; drive a high-side switch or level
+shifter from the 5 V rail instead, keeping the ESP able to toggle it.
 
 **Do not configure `clock_pin` when the meter has its own supply.** An ESPHome output pin
 initialises LOW, so naming the pin would pull the supply rail to ground. Left out of the config
@@ -38,13 +44,12 @@ the ESP's rail.
 - Everything else here comes from [kmeter](https://github.com/rszimm/kmeter) and
   [sensus_protocol_lib](https://github.com/michlv/sensus_protocol_lib), neither validated
   against an E-Series ultrasonic.
-- Two readings of the same interface are still open:
-  - **The reader clocks it** — toggling power on RED shifts out one bit per cycle, ~1 ms/bit.
-  - **The meter free-runs** — held powered, it transmits asynchronously (1200 baud ⇒ 833 µs/bit)
-    in bursts separated by seconds of idle.
-
-  The capture below distinguishes them: edges on a powered, unclocked line mean it free-runs, and
-  the narrowest pulse is one bit time.
+- **The interface is synchronous and reader-clocked.** Badger describes the HR-E as a "3-wire
+  synchronous signal type"; the reader powers the register through RED and toggles it to shift
+  out one bit per cycle, at roughly 1 ms/bit. A powered but unclocked meter says nothing, so
+  passive listening cannot work — `mode: passive` exists only to characterise the line.
+- kmeter also notes that holding the clock **low for about a second resets the register's send
+  buffer**, which is how a read is started from the beginning of the message.
 - Framing, as implemented: start (0), 7 data bits LSB-first, even parity, stop (1); ASCII
   terminated by `\r`; data inverted (LOW = 1) — that last one confirmed on hardware, which
   rejected kmeter's non-inverted reading with stop-bit errors.
