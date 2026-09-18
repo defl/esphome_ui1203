@@ -284,21 +284,44 @@ void BadgerMeterComponent::report_() {
     ESP_LOGI(TAG, "  ... %d more transitions not listed", this->num_transitions_ - logged);
 }
 
+// (bit period, clock-low time) pairs tried one per read. kmeter's 1000/500 first, then slower
+// rates, then short power interruptions — a 500 us outage every millisecond may simply brown the
+// register out, and "briefly remove power" is all the reference implementations actually claim.
+struct ClockProfile {
+  uint32_t period_us;
+  uint32_t low_us;
+};
+static const ClockProfile CLOCK_SWEEP[] = {
+    {1000, 500}, {2000, 500}, {5000, 500}, {1000, 100}, {2000, 200}, {10000, 1000},
+};
+static const int SWEEP_LEN = sizeof(CLOCK_SWEEP) / sizeof(CLOCK_SWEEP[0]);
+// Half the old count: the blocking phase is the cost, and 200 bits is 20 characters.
+static const int CLOCK_BITS_PER_READ = 200;
+
 void BadgerMeterComponent::clock_bits_() {
   // kmeter's clocking: the power line IS the clock. Drop it, raise it, let the register settle,
   // then sample. One bit per cycle.
-  const uint32_t half = this->bit_period_us_ / 2;
-  const uint32_t settle = half < 140 ? half / 2 : 70;
+  const ClockProfile profile = CLOCK_SWEEP[this->sweep_index_ % SWEEP_LEN];
+  this->sweep_index_++;
+  const uint32_t low_us = profile.low_us;
+  const uint32_t high_us = profile.period_us > low_us ? profile.period_us - low_us : 500;
+  const uint32_t settle = high_us < 140 ? high_us / 2 : 70;
+  this->last_period_us_ = profile.period_us;
+  this->last_low_us_ = low_us;
+
   this->num_bits_ = 0;
   uint32_t fed_at = micros();
 
-  for (int i = 0; i < MAX_CLOCK_BITS; i++) {
+  for (int i = 0; i < CLOCK_BITS_PER_READ; i++) {
     this->clock_pin_->digital_write(false);
-    delayMicroseconds(half);
+    delayMicroseconds(low_us > 40 ? low_us - 30 : low_us);
+    // Sampled with the meter unpowered, for comparison with the powered sample below.
+    this->low_phase_[i] = this->data_pin_->digital_read() ? 1 : 0;
+    delayMicroseconds(30);
     this->clock_pin_->digital_write(true);
     delayMicroseconds(settle);
     this->bits_[this->num_bits_++] = this->data_pin_->digital_read() ? 1 : 0;
-    delayMicroseconds(half - settle);
+    delayMicroseconds(high_us - settle);
     if (micros() - fed_at > 100000UL) {
       App.feed_wdt();
       fed_at = micros();
@@ -310,13 +333,28 @@ void BadgerMeterComponent::clock_bits_() {
 }
 
 void BadgerMeterComponent::report_bits_() {
-  int ones = 0;
-  for (int i = 0; i < this->num_bits_; i++)
+  int ones = 0, low_ones = 0, differ = 0;
+  for (int i = 0; i < this->num_bits_; i++) {
     ones += this->bits_[i];
-  ESP_LOGI(TAG, "=== CLOCKED: %d bits @ %u us, %d ones / %d zeros ===", this->num_bits_,
-           this->bit_period_us_, ones, this->num_bits_ - ones);
+    low_ones += this->low_phase_[i];
+    if (this->bits_[i] != this->low_phase_[i])
+      differ++;
+  }
+  ESP_LOGI(TAG, "=== CLOCKED: %d bits, %u us period / %u us low ===", this->num_bits_,
+           this->last_period_us_, this->last_low_us_);
+  ESP_LOGI(TAG, "  powered sample: %d ones / %d zeros | unpowered sample: %d ones / %d zeros | "
+                "%d cycles differ",
+           ones, this->num_bits_ - ones, low_ones, this->num_bits_ - low_ones, differ);
   if (ones == 0 || ones == this->num_bits_) {
-    ESP_LOGW(TAG, "Line never moved while clocking — the meter is not answering on this pin");
+    if (differ == 0) {
+      ESP_LOGW(TAG, "Line sat at %d throughout and did not react to the clock at all — the meter "
+                    "is not driving this pin, or is not being powered by the clock pin",
+               ones ? 1 : 0);
+    } else {
+      ESP_LOGW(TAG, "Powered sample never moved, but %d cycles differ from the unpowered sample "
+                    "— the clock IS reaching the line, the sampling point is wrong",
+               differ);
+    }
     return;
   }
   std::string row;

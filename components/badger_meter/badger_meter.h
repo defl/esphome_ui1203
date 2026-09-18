@@ -119,10 +119,18 @@ class BadgerMeterComponent : public Component {
   // is how a read starts at the beginning of the message rather than part-way through it.
   uint32_t reset_hold_ms_{1200};
 
-  // Clocked mode: one sampled bit per power cycle.
+  // Clocked mode: one sampled bit per power cycle, sampled twice — once while the clock is low
+  // (meter unpowered) and once after it rises. If the line never differs between the two, the
+  // clock is having no effect on it at all, which is a different fault from a bad decode.
   static const int MAX_CLOCK_BITS = 400;
   uint8_t bits_[MAX_CLOCK_BITS]{};
+  uint8_t low_phase_[MAX_CLOCK_BITS]{};
   int num_bits_{0};
+  // Which (period, low time) pair the next read uses. Rotating them costs one read each and
+  // answers whether the meter simply wants a different rate.
+  int sweep_index_{0};
+  uint32_t last_period_us_{0};
+  uint32_t last_low_us_{0};
 
   std::string read_buffer_;
 
