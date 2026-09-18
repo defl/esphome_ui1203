@@ -370,7 +370,11 @@ void BadgerMeterComponent::clock_bits_() {
   this->sweep_index_++;
   const uint32_t low_us = profile.low_us;
   const uint32_t high_us = profile.period_us > low_us ? profile.period_us - low_us : 500;
-  const uint32_t settle = high_us < 140 ? high_us / 2 : 70;
+  // kmeter samples 70 us after the rising edge. That is far too early here: the line collapses
+  // to 0 whenever the meter loses power (confirmed - 1 powered, 0 after 1.2 s unpowered, 1 again
+  // after 3 s powered), and the 7k5 pull-up has to drag it back up against whatever the
+  // unpowered register presents. Sample as late in the high phase as possible instead.
+  const uint32_t settle = high_us > 200 ? high_us - 100 : high_us / 2;
   this->last_period_us_ = profile.period_us;
   this->last_low_us_ = low_us;
 
@@ -390,7 +394,23 @@ void BadgerMeterComponent::clock_bits_() {
     this->low_phase_[i] = this->data_pin_->digital_read() ? 1 : 0;
     delayMicroseconds(30);
     this->clock_pin_->digital_write(true);
-    delayMicroseconds(settle);
+    if (i == 0) {
+      // One recovery profile per read: how long the line actually takes to come back up after
+      // power returns. Everything about where to sample follows from this.
+      uint32_t at = 0;
+      for (uint32_t probe : {50U, 100U, 200U, 400U, 800U, 1600U, 3200U}) {
+        if (probe >= high_us)
+          break;
+        delayMicroseconds(probe - at);
+        at = probe;
+        ESP_LOGD(TAG, "  recovery +%4u us after rising edge: data=%d", probe,
+                 this->data_pin_->digital_read());
+      }
+      if (settle > at)
+        delayMicroseconds(settle - at);
+    } else {
+      delayMicroseconds(settle);
+    }
     this->bits_[this->num_bits_++] = this->data_pin_->digital_read() ? 1 : 0;
     delayMicroseconds(high_us - settle);
     if (micros() - fed_at > 100000UL) {
