@@ -126,6 +126,16 @@ void BadgerMeterComponent::loop() {
             this->last_read_ms_ = now;
             break;
           }
+          // Where the line sits before anything is touched. The boot scan says it is held high
+          // by the pull-up with the meter idle, so a 0 here means the previous read left it low.
+          ESP_LOGD(TAG, "Read start: data=%d (clock is high, meter powered)",
+                   this->data_pin_->digital_read());
+          if (this->reset_hold_ms_ == 0) {
+            // Skip the reset entirely: never take power away before clocking.
+            ESP_LOGD(TAG, "reset_hold is 0 — clocking from the powered state");
+            this->set_state_(ReadState::POWER_UP);
+            break;
+          }
           this->clock_pin_->digital_write(false);
           ESP_LOGD(TAG, "Holding the meter unpowered for %u ms to reset its send buffer",
                    this->reset_hold_ms_);
@@ -161,6 +171,8 @@ void BadgerMeterComponent::loop() {
 
     case ReadState::RESET: {
       if ((now - this->state_start_ms_) >= this->reset_hold_ms_) {
+        ESP_LOGD(TAG, "After %u ms unpowered: data=%d", this->reset_hold_ms_,
+                 this->data_pin_->digital_read());
         this->clock_pin_->digital_write(true);
         ESP_LOGD(TAG, "Powering the meter for %u ms before clocking", this->power_up_time_ms_);
         this->set_state_(ReadState::POWER_UP);
@@ -171,7 +183,11 @@ void BadgerMeterComponent::loop() {
     case ReadState::POWER_UP: {
       // Non-blocking: the register wants seconds of settled power, and this board runs a 1 s
       // pressure check that must not wait for it.
+      if (this->clock_pin_ != nullptr)
+        this->clock_pin_->digital_write(true);
       if ((now - this->state_start_ms_) >= this->power_up_time_ms_) {
+        ESP_LOGD(TAG, "After %u ms powered: data=%d — clocking now", this->power_up_time_ms_,
+                 this->data_pin_->digital_read());
         this->clock_bits_();
         this->set_state_(ReadState::PARSE);
       }
