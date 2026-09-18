@@ -17,7 +17,7 @@ static const char *const TAG = "badger_meter";
 static const uint32_t ARM_TIMEOUT_MS = 8000;
 // Transition dumps are for a human; a whole burst is hundreds of lines and the histogram carries
 // the same information.
-static const int MAX_LOGGED_TRANSITIONS = 120;
+static const int MAX_LOGGED_TRANSITIONS = 24;
 static const uint32_t HISTOGRAM_BUCKET_US = 50;
 static const int HISTOGRAM_BUCKETS = 100;
 
@@ -46,6 +46,8 @@ void BadgerMeterComponent::dump_config() {
     ESP_LOGCONFIG(TAG, "  Clock/power pin: not set — meter is externally powered");
   }
   LOG_PIN("  Data Pin: ", this->data_pin_);
+  ESP_LOGCONFIG(TAG, "  Mode: %s, bit period: %u us",
+                this->mode_ == ReadMode::CLOCKED ? "clocked" : "passive", this->bit_period_us_);
   ESP_LOGCONFIG(TAG, "  Capture window: %u ms, idle gap: %u ms, interval: %u ms",
                 this->capture_window_ms_, this->idle_gap_ms_, this->update_interval_ms_);
   if (this->meter_reading_sensor_)
@@ -71,6 +73,17 @@ void BadgerMeterComponent::loop() {
       const bool time_to_read = (now - this->last_read_ms_) >= this->update_interval_ms_;
       if (time_to_read || this->read_requested_) {
         this->read_requested_ = false;
+        if (this->mode_ == ReadMode::CLOCKED) {
+          if (this->clock_pin_ == nullptr) {
+            ESP_LOGE(TAG, "clocked mode needs a clock_pin");
+            this->last_read_ms_ = now;
+            break;
+          }
+          this->clock_pin_->digital_write(true);
+          ESP_LOGD(TAG, "Powering the meter for %u ms before clocking", this->power_up_time_ms_);
+          this->set_state_(ReadState::POWER_UP);
+          break;
+        }
         this->armed_level_ = this->data_pin_->digital_read();
         ESP_LOGD(TAG, "Armed; data pin idles at %d, waiting for an edge", this->armed_level_);
         this->set_state_(ReadState::ARMED);
@@ -98,8 +111,37 @@ void BadgerMeterComponent::loop() {
       break;
     }
 
+    case ReadState::POWER_UP: {
+      // Non-blocking: the register wants seconds of settled power, and this board runs a 1 s
+      // pressure check that must not wait for it.
+      if ((now - this->state_start_ms_) >= this->power_up_time_ms_) {
+        this->clock_bits_();
+        this->set_state_(ReadState::PARSE);
+      }
+      break;
+    }
+
     case ReadState::PARSE: {
-      this->report_();
+      if (this->mode_ == ReadMode::CLOCKED) {
+        const DecodeResult best = this->decode_bits_best_();
+        if (best.score() > 0) {
+          ESP_LOGI(TAG, "Clocked decode: %d chars, %d errors, %s, %d%s1 -> '%s'", best.chars,
+                   best.errors, best.inverted ? "inverted" : "non-inverted", best.data_bits,
+                   best.parity ? "E" : "N", best.text.c_str());
+          if (best.chars >= 4) {
+            this->read_buffer_ = best.text;
+            this->parse_data_(this->read_buffer_);
+          }
+        } else {
+          ESP_LOGW(TAG, "Clocked read decoded nothing — see the bit dump");
+        }
+        this->report_bits_();
+        this->last_read_ms_ = millis();
+        this->set_state_(ReadState::IDLE);
+        break;
+      }
+      // Verdict first, dump second. The API log ring drops messages under a flood, and a few
+      // hundred transition lines were silently eating the histogram and the decode line.
       const DecodeResult best = this->decode_best_();
       if (best.score() > 0) {
         ESP_LOGI(TAG, "Best decode: %d chars, %d errors @ %u us/bit (%u baud), %s, %d%s1 -> '%s'",
@@ -108,12 +150,13 @@ void BadgerMeterComponent::loop() {
                  best.inverted ? "inverted" : "non-inverted", best.data_bits,
                  best.parity ? "E" : "N", best.text.c_str());
       } else {
-        ESP_LOGW(TAG, "No framing candidate decoded anything — see the histogram above");
+        ESP_LOGW(TAG, "No framing candidate decoded anything — see the histogram below");
       }
       if (best.chars >= 4) {
         this->read_buffer_ = best.text;
         this->parse_data_(this->read_buffer_);
       }
+      this->report_();
       this->last_read_ms_ = millis();
       this->set_state_(ReadState::IDLE);
       break;
@@ -173,16 +216,6 @@ void BadgerMeterComponent::report_() {
   const uint32_t span = this->transitions_[this->num_transitions_ - 1].offset_us;
   ESP_LOGI(TAG, "=== CAPTURE: %d transitions over %u us ===", this->num_transitions_, span);
 
-  const int logged = this->num_transitions_ < MAX_LOGGED_TRANSITIONS ? this->num_transitions_
-                                                                     : MAX_LOGGED_TRANSITIONS;
-  for (int i = 1; i < logged; i++) {
-    const uint32_t delta = this->transitions_[i].offset_us - this->transitions_[i - 1].offset_us;
-    ESP_LOGI(TAG, "  T%3d @%7u us: %s for %6u us", i, this->transitions_[i - 1].offset_us,
-             this->transitions_[i - 1].level ? "HIGH" : "LOW ", delta);
-  }
-  if (this->num_transitions_ > logged)
-    ESP_LOGI(TAG, "  ... %d more transitions not listed", this->num_transitions_ - logged);
-
   uint32_t min_delta = UINT32_MAX, max_delta = 0;
   int low_buckets[HISTOGRAM_BUCKETS] = {};
   int high_buckets[HISTOGRAM_BUCKETS] = {};
@@ -228,6 +261,138 @@ void BadgerMeterComponent::report_() {
     ESP_LOGW(TAG, "%dx long HIGH + %dx ~2.7ms LOW at a ~16.7 ms repeat: this is 60 Hz mains "
                   "coupling on an undriven line, not meter data",
              long_high, mid_low);
+
+  const int logged = this->num_transitions_ < MAX_LOGGED_TRANSITIONS ? this->num_transitions_
+                                                                     : MAX_LOGGED_TRANSITIONS;
+  for (int i = 1; i < logged; i++) {
+    const uint32_t delta = this->transitions_[i].offset_us - this->transitions_[i - 1].offset_us;
+    ESP_LOGI(TAG, "  T%3d @%7u us: %s for %6u us", i, this->transitions_[i - 1].offset_us,
+             this->transitions_[i - 1].level ? "HIGH" : "LOW ", delta);
+  }
+  if (this->num_transitions_ > logged)
+    ESP_LOGI(TAG, "  ... %d more transitions not listed", this->num_transitions_ - logged);
+}
+
+void BadgerMeterComponent::clock_bits_() {
+  // kmeter's clocking: the power line IS the clock. Drop it, raise it, let the register settle,
+  // then sample. One bit per cycle.
+  const uint32_t half = this->bit_period_us_ / 2;
+  const uint32_t settle = half < 140 ? half / 2 : 70;
+  this->num_bits_ = 0;
+  uint32_t fed_at = micros();
+
+  for (int i = 0; i < MAX_CLOCK_BITS; i++) {
+    this->clock_pin_->digital_write(false);
+    delayMicroseconds(half);
+    this->clock_pin_->digital_write(true);
+    delayMicroseconds(settle);
+    this->bits_[this->num_bits_++] = this->data_pin_->digital_read() ? 1 : 0;
+    delayMicroseconds(half - settle);
+    if (micros() - fed_at > 100000UL) {
+      App.feed_wdt();
+      fed_at = micros();
+    }
+  }
+  // Leave the meter powered; it costs nothing and keeps the line defined between reads.
+  this->clock_pin_->digital_write(true);
+  App.feed_wdt();
+}
+
+void BadgerMeterComponent::report_bits_() {
+  int ones = 0;
+  for (int i = 0; i < this->num_bits_; i++)
+    ones += this->bits_[i];
+  ESP_LOGI(TAG, "=== CLOCKED: %d bits @ %u us, %d ones / %d zeros ===", this->num_bits_,
+           this->bit_period_us_, ones, this->num_bits_ - ones);
+  if (ones == 0 || ones == this->num_bits_) {
+    ESP_LOGW(TAG, "Line never moved while clocking — the meter is not answering on this pin");
+    return;
+  }
+  std::string row;
+  for (int i = 0; i < this->num_bits_; i++) {
+    row += this->bits_[i] ? '1' : '0';
+    if (row.length() == 60 || i == this->num_bits_ - 1) {
+      ESP_LOGI(TAG, "  %3d: %s", i - (int) row.length() + 1, row.c_str());
+      row.clear();
+    }
+  }
+}
+
+DecodeResult BadgerMeterComponent::decode_bits_once_(bool inverted, int data_bits,
+                                                     bool parity) const {
+  DecodeResult out;
+  out.inverted = inverted;
+  out.data_bits = data_bits;
+  out.parity = parity;
+  out.bit_us = this->bit_period_us_;
+
+  const int frame = 1 + data_bits + (parity ? 1 : 0) + 1;
+  int i = 0;
+  while (i + frame <= this->num_bits_) {
+    const bool start = inverted ? !this->bits_[i] : (bool) this->bits_[i];
+    if (start) {  // idle, not a start bit
+      i++;
+      continue;
+    }
+    uint8_t value = 0;
+    int ones = 0;
+    for (int b = 0; b < data_bits; b++) {
+      bool bit = this->bits_[i + 1 + b] != 0;
+      if (inverted)
+        bit = !bit;
+      if (bit) {
+        value |= (uint8_t) (1 << b);
+        ones++;
+      }
+    }
+    bool ok = true;
+    if (parity) {
+      bool bit = this->bits_[i + 1 + data_bits] != 0;
+      if (inverted)
+        bit = !bit;
+      if (bit)
+        ones++;
+      if ((ones % 2) != 0)
+        ok = false;
+    }
+    bool stop = this->bits_[i + frame - 1] != 0;
+    if (inverted)
+      stop = !stop;
+    if (!stop)
+      ok = false;
+
+    if (!ok) {
+      out.errors++;
+      i++;  // resync one bit at a time rather than trusting a bad frame
+      continue;
+    }
+    if (value >= 0x20 && value < 0x7f) {
+      out.text += (char) value;
+      out.chars++;
+      out.seen[value >> 5] |= (1U << (value & 31U));
+    } else if (value == '\r' || value == '\n') {
+      out.chars++;
+    } else {
+      out.errors++;
+    }
+    i += frame;
+  }
+  return out;
+}
+
+DecodeResult BadgerMeterComponent::decode_bits_best_() const {
+  DecodeResult best;
+  const int data_bits[4] = {7, 8, 7, 8};
+  const bool parity[4] = {true, false, false, true};
+  for (int inverted = 0; inverted < 2; inverted++) {
+    for (int f = 0; f < 4; f++) {
+      const DecodeResult candidate =
+          this->decode_bits_once_(inverted != 0, data_bits[f], parity[f]);
+      if (candidate.score() > best.score())
+        best = candidate;
+    }
+  }
+  return best;
 }
 
 bool BadgerMeterComponent::level_at_(uint32_t offset_us) const {

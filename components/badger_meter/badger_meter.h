@@ -18,7 +18,17 @@ enum class ReadState : uint8_t {
   IDLE,
   ARMED,
   CAPTURE,
+  POWER_UP,
+  CLOCK,
   PARSE,
+};
+
+// Which of the two readings of this interface to exercise.
+//   PASSIVE — hold the meter powered and watch. Proves it free-runs, and at what bit rate.
+//   CLOCKED — toggle power on the RED wire, one bit per cycle, as kmeter does.
+enum class ReadMode : uint8_t {
+  PASSIVE,
+  CLOCKED,
 };
 
 // One decode attempt: a bit period, a polarity and a framing, scored by how much of the capture
@@ -66,6 +76,8 @@ class BadgerMeterComponent : public Component {
   void set_capture_window(uint32_t ms) { this->capture_window_ms_ = ms; }
   void set_idle_gap(uint32_t ms) { this->idle_gap_ms_ = ms; }
   void set_read_interval(uint32_t ms) { this->update_interval_ms_ = ms; }
+  void set_mode(ReadMode mode) { this->mode_ = mode; }
+  void set_bit_period(uint32_t us) { this->bit_period_us_ = us; }
 
   void set_meter_reading_sensor(sensor::Sensor *sensor) { this->meter_reading_sensor_ = sensor; }
   void set_raw_value_sensor(sensor::Sensor *sensor) { this->raw_value_sensor_ = sensor; }
@@ -99,6 +111,14 @@ class BadgerMeterComponent : public Component {
   Transition transitions_[MAX_TRANSITIONS];
   int num_transitions_{0};
 
+  ReadMode mode_{ReadMode::PASSIVE};
+  uint32_t bit_period_us_{1000};
+
+  // Clocked mode: one sampled bit per power cycle.
+  static const int MAX_CLOCK_BITS = 400;
+  uint8_t bits_[MAX_CLOCK_BITS]{};
+  int num_bits_{0};
+
   std::string read_buffer_;
 
   sensor::Sensor *meter_reading_sensor_{nullptr};
@@ -107,8 +127,12 @@ class BadgerMeterComponent : public Component {
   text_sensor::TextSensor *meter_id_sensor_{nullptr};
 
   void capture_();
+  void clock_bits_();
   void report_();
+  void report_bits_();
   DecodeResult decode_best_();
+  DecodeResult decode_bits_best_() const;
+  DecodeResult decode_bits_once_(bool inverted, int data_bits, bool parity) const;
   bool level_at_(uint32_t offset_us) const;
   DecodeResult decode_once_(uint32_t bit_us, bool inverted, int data_bits, bool parity) const;
   void parse_data_(const std::string &data);
