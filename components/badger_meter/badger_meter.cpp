@@ -357,9 +357,13 @@ struct ClockProfile {
 // The line needs ~100 us to recover after power returns, so anything earlier reads the recovery
 // rather than the bit. Where the register actually presents the bit inside the high phase is the
 // open variable now, so that is what these sweep: same period, different sampling instants.
+// Everything from 1 to 5 ms has been tried and the register stays idle. kmeter calls 1 ms
+// "about as fast as I can get", which says nothing about how slow these things can want to be —
+// and this is a battery-powered meter whose own logic may be far slower than a mains reader's.
+// So: down to 50 ms per bit, at the cost of only a handful of bits per read.
 static const ClockProfile CLOCK_SWEEP[] = {
-    {2000, 50, 200},  {2000, 100, 200},  {2000, 200, 300},
-    {2000, 300, 400}, {5000, 100, 300},  {5000, 1000, 1200},
+    {2000, 200, 300},     {10000, 1000, 3000},   {20000, 2000, 5000},
+    {50000, 5000, 10000}, {20000, 10000, 5000},  {50000, 25000, 10000},
 };
 static const int SWEEP_LEN = sizeof(CLOCK_SWEEP) / sizeof(CLOCK_SWEEP[0]);
 // Half the old count: the blocking phase is the cost, and 200 bits is 20 characters.
@@ -385,8 +389,8 @@ void BadgerMeterComponent::clock_bits_() {
   int budget_bits = (int) (CLOCK_BUDGET_US / profile.period_us);
   if (budget_bits > CLOCK_BITS_PER_READ)
     budget_bits = CLOCK_BITS_PER_READ;
-  if (budget_bits < 40)
-    budget_bits = 40;
+  if (budget_bits < 8)
+    budget_bits = 8;
 
   this->num_bits_ = 0;
   uint32_t fed_at = micros();
