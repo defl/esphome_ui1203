@@ -31,8 +31,23 @@ struct DecodeResult {
   int data_bits{0};
   bool inverted{false};
   bool parity{false};
+  uint32_t seen[4]{0, 0, 0, 0};  // bitmap of which byte values appeared
 
-  int score() const { return this->chars - this->errors; }
+  int distinct() const {
+    int total = 0;
+    for (uint32_t word : this->seen) {
+      while (word != 0) {
+        total += (int) (word & 1U);
+        word >>= 1;
+      }
+    }
+    return total;
+  }
+
+  // A slow square wave frames perfectly at any bit rate and decodes to one character repeated —
+  // 60 Hz mains coupling scored 28 clean chars of '|' before this guard existed. Real ASCII is
+  // never one value, so anything under three distinct characters scores nothing.
+  int score() const { return this->distinct() >= 3 ? this->chars - this->errors : 0; }
 };
 
 class BadgerMeterComponent : public Component {

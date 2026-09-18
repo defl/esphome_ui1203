@@ -212,6 +212,22 @@ void BadgerMeterComponent::report_() {
   if (min_delta > 0)
     ESP_LOGI(TAG, "Narrowest pulse %u us => %u baud if that is one bit", min_delta,
              1000000U / min_delta);
+
+  // Mains coupling on a line nothing is driving has a signature: a long HIGH, a shorter LOW and
+  // a 16.67 ms repeat, with microsecond chatter at each threshold crossing. Worth naming,
+  // because it looks like a signal and frames cleanly as one repeated character.
+  int long_high = 0, mid_low = 0;
+  for (int i = 1; i < this->num_transitions_; i++) {
+    const uint32_t delta = this->transitions_[i].offset_us - this->transitions_[i - 1].offset_us;
+    if (this->transitions_[i - 1].level && delta >= 12500 && delta <= 15000)
+      long_high++;
+    else if (!this->transitions_[i - 1].level && delta >= 2400 && delta <= 3100)
+      mid_low++;
+  }
+  if (long_high >= 3 && mid_low >= 3)
+    ESP_LOGW(TAG, "%dx long HIGH + %dx ~2.7ms LOW at a ~16.7 ms repeat: this is 60 Hz mains "
+                  "coupling on an undriven line, not meter data",
+             long_high, mid_low);
 }
 
 bool BadgerMeterComponent::level_at_(uint32_t offset_us) const {
@@ -295,6 +311,7 @@ DecodeResult BadgerMeterComponent::decode_once_(uint32_t bit_us, bool inverted, 
     } else if (value >= 0x20 && value < 0x7f) {
       out.text += (char) value;
       out.chars++;
+      out.seen[value >> 5] |= (1U << (value & 31U));
     } else if (value == '\r' || value == '\n') {
       out.chars++;  // a real terminator, but not worth printing into the log line
     } else {
