@@ -358,8 +358,8 @@ struct ClockProfile {
 // rather than the bit. Where the register actually presents the bit inside the high phase is the
 // open variable now, so that is what these sweep: same period, different sampling instants.
 static const ClockProfile CLOCK_SWEEP[] = {
-    {2000, 500, 150},  {2000, 500, 250},  {2000, 500, 400},
-    {2000, 500, 700},  {2000, 500, 1200}, {1000, 500, 150},
+    {2000, 50, 200},  {2000, 100, 200},  {2000, 200, 300},
+    {2000, 300, 400}, {5000, 100, 300},  {5000, 1000, 1200},
 };
 static const int SWEEP_LEN = sizeof(CLOCK_SWEEP) / sizeof(CLOCK_SWEEP[0]);
 // Half the old count: the blocking phase is the cost, and 200 bits is 20 characters.
