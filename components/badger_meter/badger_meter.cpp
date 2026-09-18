@@ -297,6 +297,9 @@ static const ClockProfile CLOCK_SWEEP[] = {
 static const int SWEEP_LEN = sizeof(CLOCK_SWEEP) / sizeof(CLOCK_SWEEP[0]);
 // Half the old count: the blocking phase is the cost, and 200 bits is 20 characters.
 static const int CLOCK_BITS_PER_READ = 200;
+// The clock phase blocks the loop, and this board runs a 1 s pressure check, so a slow profile
+// gets fewer bits rather than a longer block. 10 ms/bit x 200 would have been two seconds.
+static const uint32_t CLOCK_BUDGET_US = 500000;
 
 void BadgerMeterComponent::clock_bits_() {
   // kmeter's clocking: the power line IS the clock. Drop it, raise it, let the register settle,
@@ -309,10 +312,16 @@ void BadgerMeterComponent::clock_bits_() {
   this->last_period_us_ = profile.period_us;
   this->last_low_us_ = low_us;
 
+  int budget_bits = (int) (CLOCK_BUDGET_US / profile.period_us);
+  if (budget_bits > CLOCK_BITS_PER_READ)
+    budget_bits = CLOCK_BITS_PER_READ;
+  if (budget_bits < 40)
+    budget_bits = 40;
+
   this->num_bits_ = 0;
   uint32_t fed_at = micros();
 
-  for (int i = 0; i < CLOCK_BITS_PER_READ; i++) {
+  for (int i = 0; i < budget_bits; i++) {
     this->clock_pin_->digital_write(false);
     delayMicroseconds(low_us > 40 ? low_us - 30 : low_us);
     // Sampled with the meter unpowered, for comparison with the powered sample below.
