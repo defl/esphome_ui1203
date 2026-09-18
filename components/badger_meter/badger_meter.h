@@ -131,6 +131,7 @@ class BadgerMeterComponent : public Component {
   int sweep_index_{0};
   uint32_t last_period_us_{0};
   uint32_t last_low_us_{0};
+  uint32_t last_sample_us_{0};
 
   std::string read_buffer_;
 

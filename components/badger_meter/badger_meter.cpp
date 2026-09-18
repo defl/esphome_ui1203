@@ -352,9 +352,14 @@ void BadgerMeterComponent::report_() {
 struct ClockProfile {
   uint32_t period_us;
   uint32_t low_us;
+  uint32_t sample_us;  // after the rising edge
 };
+// The line needs ~100 us to recover after power returns, so anything earlier reads the recovery
+// rather than the bit. Where the register actually presents the bit inside the high phase is the
+// open variable now, so that is what these sweep: same period, different sampling instants.
 static const ClockProfile CLOCK_SWEEP[] = {
-    {1000, 500}, {2000, 500}, {5000, 500}, {1000, 100}, {2000, 200}, {10000, 1000},
+    {2000, 500, 150},  {2000, 500, 250},  {2000, 500, 400},
+    {2000, 500, 700},  {2000, 500, 1200}, {1000, 500, 150},
 };
 static const int SWEEP_LEN = sizeof(CLOCK_SWEEP) / sizeof(CLOCK_SWEEP[0]);
 // Half the old count: the blocking phase is the cost, and 200 bits is 20 characters.
@@ -370,13 +375,12 @@ void BadgerMeterComponent::clock_bits_() {
   this->sweep_index_++;
   const uint32_t low_us = profile.low_us;
   const uint32_t high_us = profile.period_us > low_us ? profile.period_us - low_us : 500;
-  // kmeter samples 70 us after the rising edge. That is far too early here: the line collapses
-  // to 0 whenever the meter loses power (confirmed - 1 powered, 0 after 1.2 s unpowered, 1 again
-  // after 3 s powered), and the 7k5 pull-up has to drag it back up against whatever the
-  // unpowered register presents. Sample as late in the high phase as possible instead.
-  const uint32_t settle = high_us > 200 ? high_us - 100 : high_us / 2;
+  uint32_t settle = profile.sample_us;
+  if (settle + 50 > high_us)
+    settle = high_us > 100 ? high_us - 50 : high_us / 2;
   this->last_period_us_ = profile.period_us;
   this->last_low_us_ = low_us;
+  this->last_sample_us_ = settle;
 
   int budget_bits = (int) (CLOCK_BUDGET_US / profile.period_us);
   if (budget_bits > CLOCK_BITS_PER_READ)
@@ -431,8 +435,8 @@ void BadgerMeterComponent::report_bits_() {
     if (this->bits_[i] != this->low_phase_[i])
       differ++;
   }
-  ESP_LOGI(TAG, "=== CLOCKED: %d bits, %u us period / %u us low ===", this->num_bits_,
-           this->last_period_us_, this->last_low_us_);
+  ESP_LOGI(TAG, "=== CLOCKED: %d bits, %u us period / %u us low / sampled +%u us ===",
+           this->num_bits_, this->last_period_us_, this->last_low_us_, this->last_sample_us_);
   ESP_LOGI(TAG, "  powered sample: %d ones / %d zeros | unpowered sample: %d ones / %d zeros | "
                 "%d cycles differ",
            ones, this->num_bits_ - ones, low_ones, this->num_bits_ - low_ones, differ);
