@@ -415,8 +415,19 @@ void BadgerMeterComponent::clock_bits_() {
     } else {
       delayMicroseconds(settle);
     }
-    this->bits_[this->num_bits_++] = this->data_pin_->digital_read() ? 1 : 0;
-    delayMicroseconds(high_us - settle);
+    const int sampled = this->data_pin_->digital_read() ? 1 : 0;
+    this->bits_[this->num_bits_] = (uint8_t) sampled;
+    // Watch the rest of the high phase rather than trusting one instant: a bit asserted as a
+    // short pulse anywhere after the recovery would otherwise be missed entirely.
+    int dipped = sampled == 0 ? 1 : 0;
+    const uint32_t watch_until = high_us > 60 ? high_us - 30 : high_us;
+    for (uint32_t at = settle; at < watch_until; at += 20) {
+      delayMicroseconds(20);
+      if (this->data_pin_->digital_read() == 0)
+        dipped = 1;
+    }
+    this->any_low_[this->num_bits_] = (uint8_t) dipped;
+    this->num_bits_++;
     if (micros() - fed_at > 100000UL) {
       App.feed_wdt();
       fed_at = micros();
@@ -428,10 +439,11 @@ void BadgerMeterComponent::clock_bits_() {
 }
 
 void BadgerMeterComponent::report_bits_() {
-  int ones = 0, low_ones = 0, differ = 0;
+  int ones = 0, low_ones = 0, differ = 0, dips = 0;
   for (int i = 0; i < this->num_bits_; i++) {
     ones += this->bits_[i];
     low_ones += this->low_phase_[i];
+    dips += this->any_low_[i];
     if (this->bits_[i] != this->low_phase_[i])
       differ++;
   }
@@ -440,6 +452,17 @@ void BadgerMeterComponent::report_bits_() {
   ESP_LOGI(TAG, "  powered sample: %d ones / %d zeros | unpowered sample: %d ones / %d zeros | "
                 "%d cycles differ",
            ones, this->num_bits_ - ones, low_ones, this->num_bits_ - low_ones, differ);
+  ESP_LOGI(TAG, "  dipped somewhere in the window: %d of %d cycles", dips, this->num_bits_);
+  if (dips > 0 && dips < this->num_bits_ && (ones == 0 || ones == this->num_bits_)) {
+    std::string row;
+    for (int i = 0; i < this->num_bits_; i++) {
+      row += this->any_low_[i] ? '0' : '1';
+      if (row.length() == 60 || i == this->num_bits_ - 1) {
+        ESP_LOGI(TAG, "  dip%3d: %s", i - (int) row.length() + 1, row.c_str());
+        row.clear();
+      }
+    }
+  }
   if (ones == 0 || ones == this->num_bits_) {
     if (differ == 0) {
       ESP_LOGW(TAG, "Line sat at %d throughout and did not react to the clock at all — the meter "

@@ -125,6 +125,9 @@ class BadgerMeterComponent : public Component {
   static const int MAX_CLOCK_BITS = 400;
   uint8_t bits_[MAX_CLOCK_BITS]{};
   uint8_t low_phase_[MAX_CLOCK_BITS]{};
+  // Whether the line dipped at any point in the valid window, not just at the sampled instant.
+  // A register that asserts its bit as a short pulse is invisible to a single sample.
+  uint8_t any_low_[MAX_CLOCK_BITS]{};
   int num_bits_{0};
   // Which (period, low time) pair the next read uses. Rotating them costs one read each and
   // answers whether the meter simply wants a different rate.
