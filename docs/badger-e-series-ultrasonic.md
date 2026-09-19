@@ -103,10 +103,10 @@ factory, so read your own LCD.
 - **The patent says 7E2; the meter says 7E1.** The original Rockwell/Sensus patents specify two
   stop bits and a 1200 or 2400 Hz clock. This register answers 7E1, and is not fussy about rate.
 
-## Vendor documentation
+## Standard
 
-- The governing standard is **AWWA C707**, *Encoder-Type Remote-Registration Systems for
-  Cold-Water Meters* (current edition C707-22). It is paywalled.
+The governing standard is **AWWA C707**, *Encoder-Type Remote-Registration Systems for Cold-Water
+Meters* (current edition C707-22). It is paywalled and was not used here.
 
 ## Sources
 
