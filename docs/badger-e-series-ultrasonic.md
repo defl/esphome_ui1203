@@ -14,7 +14,8 @@ taken from a named, publicly available source.
 |---|---|
 | Model | Badger Meter **E-Series® Ultrasonic**, 1-inch |
 | Body | stainless steel |
-| Display | 9-digit LCD, showing total and rate of flow |
+| Display | 9-digit LCD alternating two screens only: total (ft³) and rate of flow (gal/min, 0.01 resolution) |
+| Generation | most likely **first-generation** E-Series: Badger's 2013 manual describes exactly these two screens, while the 2021 E-Series G2 manual adds temperature, alarm/operating-mode and firmware screens |
 | Power | internal sealed battery — the meter measures on its own; the encoder interface is powered by whatever reads it |
 | Encoder output | 3-conductor cable, labelled only with an **`HR`** sticker (high-resolution encoder) |
 | Cable colours | red, black, white — no green |
@@ -119,7 +120,7 @@ V;RB003549269;IB0017118249;GC00;M1D0200,000000<CR>
 | `RB` | `003549269` | register reading, 9 digits. Here **3,549.269 ft³**, confirmed against the LCD (`003549.269 ft³`) |
 | `IB` | `0017118249` | meter serial number — matches the number stamped on the meter |
 | `GC` | `00` | **instantaneous flow rate** — consistent with whole gallons per minute, rounded up (see below) |
-| `M1D` | `0200,000000` | not decoded; static — did not change with flow. Probably part of the E-Series extended message |
+| `M1D` | `0200,000000` | not decoded; static — likely configuration or identity data rather than a measurement (see below) |
 
 ### `GC` against measured flow
 
@@ -140,9 +141,15 @@ The component publishes `GC` as the `flow_rate` sensor in gal/min. It has only e
 two decimal digits; if a letter appears the field is hex, so the component logs a warning and
 publishes nothing rather than a wrong value.
 
-Badger's E-Series G2 manual does say the extended encoder message can carry alarms, temperature,
-pressure and maximum flow rate, and lists its alarm codes as a hex bitmask (`001` empty pipe …
-`200` exceeding max flow). Whether any of that is in `M1D` is not established.
+### `M1D`
+
+Static through every read, idle and at both flow rates. Badger's E-Series G2 manual says the
+extended encoder message can carry alarms, temperature, pressure and maximum flow rate, and lists
+its alarm codes as a hex bitmask ending `200` = exceeding max flow — which `0200` resembles. But
+the alarm reading does not hold: E-Series meters show an alarm screen whenever an alarm is present,
+and this meter shows none. And as a likely first-generation unit, the G2 code table may not apply
+to it at all. With no firmware screen to compare against either, `M1D` stays undecoded: most
+plausibly a firmware, model or size code.
 
 ### Register resolution by meter size
 
