@@ -4,56 +4,67 @@ esphome:
 
 esp32:
   board: esp32dev
-  # Or for ESP8266:
-  # esp8266:
-  #   board: esp01_1m
 
-# Enable logging
 logger:
 
-# Enable Home Assistant API
 api:
 
 ota:
-  platform: esphome
+  - platform: esphome
 
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-
   ap:
     ssid: "Badger-Meter-Fallback"
     password: !secret ap_password
 
 captive_portal:
 
-# Load the external component from local directory
 external_components:
   - source:
-      type: local
-      path: components
+      type: git
+      url: https://github.com/defl/esphome_ui1203
+      ref: main
+    components: [badger_meter]
+    refresh: 0s
 
-# Badger Meter (Sensus UI-1203 wired protocol)
-# Wiring:
-#   RED wire   -> Clock pin (GPIO output) - also powers the meter
-#   GREEN wire -> Data pin (GPIO input)  - meter data output
-#   BLACK wire -> GND
+# Badger E-Series Ultrasonic, HR encoder, Itron-ERT colour code — see
+# docs/badger-e-series-ultrasonic.md. Check which colour code YOUR cable uses before wiring:
+#   BLACK -> GPIO16   clock and power, driven directly at 3.3 V
+#   RED   -> GPIO17   data, open collector, external 4.7-10 kOhm pull-up to 3.3 V
+#   WHITE -> GND      common
+# On a standard-code cable it is RED -> GPIO16, GREEN (or WHITE) -> GPIO17, BLACK -> GND.
 badger_meter:
   id: badger_meter_component
   clock_pin: GPIO16
-  data_pin: GPIO17
-  power_up_time: 3s  # Time to wait after powering meter before reading
+  data_pin:
+    number: GPIO17
+    mode:
+      input: true
+      pullup: true
+  mode: clocked
+  read_interval: 60s   # 15 s or more; faster and the E-Series holds its reading
 
 sensor:
   - platform: badger_meter
     meter_reading:
-      name: "Water Meter Reading"
-      # If your meter reports in gallons, convert to m3:
-      # filters:
-      #   - multiply: 0.00378541  # gallons to m3
-      # If your meter reports in 10s of gallons:
-      # filters:
-      #   - multiply: 0.0378541
+      name: "Water Meter"
+      # Set these from your own meter's LCD. The tested unit reports cubic feet with three
+      # implied decimals; others report gallons or cubic metres at a size-dependent resolution.
+      unit_of_measurement: "ft³"
+      device_class: water
+      state_class: total_increasing
+      accuracy_decimals: 3
+      filters:
+        - multiply: 0.001
+        # Drop reversals and implausible jumps: TOTAL_INCREASING reads a reversal as a meter
+        # reset, and a mis-framed digit would put a spike in Home Assistant's statistics.
+        - lambda: |-
+            static float last = NAN;
+            if (!std::isnan(last) && (x < last || x - last > 100.0f)) return {};
+            last = x;
+            return x;
     raw_value:
       name: "Water Meter Raw Value"
 
@@ -64,17 +75,8 @@ text_sensor:
     meter_id:
       name: "Water Meter ID"
 
-# Optional: button to trigger a manual read
 button:
   - platform: template
     name: "Read Water Meter"
     on_press:
-      - lambda: |-
-          id(badger_meter_component).request_read();
-
-# Optional: interval-based reading override
-# interval:
-#   - interval: 5min
-#     then:
-#       - lambda: |-
-#           id(badger_meter_component).request_read();
+      - lambda: id(badger_meter_component).request_read();

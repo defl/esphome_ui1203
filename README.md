@@ -1,90 +1,61 @@
 # Badger Water Meter ESPHome Component
 
-ESPHome external component for reading Badger water meters over the **Sensus UI-1203** wired
-encoder interface.
+ESPHome external component for reading Badger water meters over the three-wire **Sensus
+(UI-1203) encoder protocol** — the same interface AMR/AMI endpoints use.
 
-> **Status: working** on a Badger E-Series ultrasonic (HR encoder) since 2026-09-18:
->
-> ```
-> V;RB003549269;IB0017118249;GC00;M1D0200,000000
-> ```
->
-> 7E1, non-inverted, clocked at 417 µs per bit from a 3.3 V GPIO. The component still carries
-> diagnostic scaffolding (pin scan, clock sweep, window watch) from getting there.
->
-> **Check your cable's colour code first — it cost a full day here.** Badger ships two:
->
-> | Function | Standard (Sensus) code | **Itron ERT cable** |
-> |---|---|---|
-> | Clock / power | Red | **Black** |
-> | Data | Green (sometimes White) | **Red** |
-> | Common | Black | **White / shield** |
->
-> A red/black/white cable fits *both* columns. The one here was the Itron variant; wired to the
-> standard code, the meter's clock input sat on ground and it never answered, at any rate or
-> voltage. A DMM diode test tells them apart: the data output's body diode shows as a single
-> ~0.5 V junction from **common (+) to data (−)**, open everywhere else. Sources: SCADAmetrics'
-> EtherMeter compatibility matrix and the TheMeterDisplay / Signalizer datasheets.
+**Status: working** on a Badger E-Series® Ultrasonic meter with the HR (high-resolution) encoder
+output, reading every 60 s into Home Assistant since 2026-09-18:
 
-## Hardware
+```
+V;RB003549269;IB0017118249;GC00;M1D0200,000000
+```
 
-Any ESP32 or ESP8266 board with one free GPIO for data, plus a second one only if the ESP is to
-power the meter.
+That is 3,549.269 ft³, matching the meter's own LCD. Full details of the meter, the message and
+the timings are in [docs/badger-e-series-ultrasonic.md](docs/badger-e-series-ultrasonic.md).
+
+## Check your cable's colour code first
+
+This cost a full day. Badger ships the encoder cable in **two colour codes**, and a
+red/black/white cable fits both:
+
+| Function | Standard (Sensus) code | **Itron ERT cable** |
+|---|---|---|
+| Clock / power | Red | **Black** |
+| Data (open collector) | Green — sometimes White | **Red** |
+| Common | Black | **White / shield** |
+
+The tested meter uses the **Itron ERT** code. Wired to the standard code instead, its clock input
+sat on ground: it never answered at any rate or voltage, and the floating lines picked up 60 Hz
+mains that looked like a signal.
+
+**Tell them apart with a DMM diode test**, meter disconnected (a few volts at ~1 mA, harmless).
+The data output's transistor has a body diode from its common to its collector, so the only
+junction you should find is **common (+) → data (−), ~0.5 V**. On the tested meter:
+white (+) → red (−) = 0.527 V, every other pair open in both directions.
+
+Sources: SCADAmetrics' [EtherMeter compatibility matrix](https://scadametrics.com/PDF/Compatibility_Matrix_209.pdf)
+("On certain Badger Meters that are built to be connected to an Itron ERT… BLACK=TX, RED=RX,
+DRAIN=CMN"), and the wiring tables in the
+[TheMeterDisplay](https://scadametrics.com/PDF/TMD_v5.pdf) and
+[Signalizer](https://scadametrics.com/PDF/EMP_vEVOQ4.pdf) datasheets.
 
 ## Wiring
 
-The encoder has three wires:
+Tested on an ESP32 (ESP32 rev 3.1, esp-idf):
 
-| Wire | Function | Connect to |
-|------|----------|-----------|
-| RED | Power, and the clock — toggling it shifts out bits | 5 V through a switch the ESP drives |
-| GREEN | Data, open-collector | ESP GPIO (input) + external 4.7k–10k pull-up |
-| BLACK | Ground | ESP GND |
+| Meter wire (Itron code) | Function | ESP32 |
+|---|---|---|
+| **Black** | clock and power | **GPIO16**, driven directly |
+| **Red** | data, open collector | **GPIO17** + external pull-up to 3.3 V (7.5 kΩ used; 4.7–10 kΩ is fine) |
+| **White** | common | **GND** |
 
-Those colours are Badger's own, from the HR-E LCD manual's "Encoder Cable with Flying Lead"
-table: `RED - Power`, `GREEN - Data`, `BLACK - Ground`. Badger's documentation uses no white
-conductor anywhere on this meter — its other outputs are scaled (red +, black −), unscaled
-(green +, black −) and 4-20 mA (red, black). **If the cable in front of you has a white wire,
-establish what it is before assuming it is data.**
-
-**RED wants 5 V.** An ESP32 GPIO at 3.3 V is marginal at best; drive a high-side switch or level
-shifter from the 5 V rail instead, keeping the ESP able to toggle it.
-
-**Do not configure `clock_pin` when the meter has its own supply.** An ESPHome output pin
-initialises LOW, so naming the pin would pull the supply rail to ground. Left out of the config
-the pin is never touched. Configured, it is driven HIGH and held there, powering the meter.
-
-**Data line:** open-collector — the meter pulls it low. Use the internal pull-up or a 10k to
-the ESP's rail.
-
-## What is actually known
-
-- No manufacturer timing or electrical specification is published for this meter.
-- Everything else here comes from [kmeter](https://github.com/rszimm/kmeter) and
-  [sensus_protocol_lib](https://github.com/michlv/sensus_protocol_lib), neither validated
-  against an E-Series ultrasonic.
-- **The interface is synchronous and reader-clocked.** Badger describes the HR-E as a "3-wire
-  synchronous signal type"; the reader powers the register through RED and toggles it to shift
-  out one bit per cycle, at roughly 1 ms/bit. A powered but unclocked meter says nothing, so
-  passive listening cannot work — `mode: passive` exists only to characterise the line.
-- kmeter also notes that holding the clock **low for about a second resets the register's send
-  buffer**, which is how a read is started from the beginning of the message.
-- Framing, as implemented: start (0), 7 data bits LSB-first, even parity, stop (1); ASCII
-  terminated by `\r`; data inverted (LOW = 1) — that last one confirmed on hardware, which
-  rejected kmeter's non-inverted reading with stop-bit errors.
-
-## How the capture works
-
-`read_interval` (or the `request_read()` lambda) arms the component. Arming is non-blocking: the
-data pin is sampled once per loop until it moves, for up to 8 s. The first edge starts a blocking
-capture that records every transition with microsecond offsets until the burst ends (an idle gap),
-the window expires, or the buffer fills.
-
-It then logs the transition list, a 50 µs-bucket pulse-width histogram and the narrowest pulse,
-and tries to decode the capture against every combination of {narrowest pulse, 833, 1000, 416,
-208, 104, 2083 µs} × {inverted, non-inverted} × {7E1, 8N1, 7N1, 8E1}, reporting the one that
-yields the most well-framed printable characters. A successful decode is published to the
-sensors like any other read.
+- **3.3 V straight from a GPIO is enough** — no level shifter, no 5 V; the pin powers the encoder
+  interface directly. SCADAmetrics' TheMeterDisplay likewise reads Badger registers from a single
+  ~3.2 V lithium cell.
+- **Use an external pull-up.** The ESP32's internal ~45 kΩ is too weak against mains coupling on
+  a cable run.
+- **Keep the cable short.** SCADAmetrics reports communication problems with this meter on
+  "medium to long" encoder cable runs.
 
 ## Installation
 
@@ -100,23 +71,38 @@ external_components:
 
 ## Configuration
 
+The configuration running on the tested meter. See [badger_meter.yaml](badger_meter.yaml) for a
+complete device file.
+
 ```yaml
 badger_meter:
   id: badger_meter_component
+  clock_pin: GPIO16        # meter BLACK (Itron code): power and clock
   data_pin:
-    number: GPIO17
+    number: GPIO17         # meter RED (Itron code): open-collector data
     mode:
       input: true
       pullup: true
-  # clock_pin: GPIO16      # ONLY if the ESP powers the meter — see Wiring
-  capture_window: 1200ms   # hard stop for one capture
-  idle_gap: 250ms          # end the capture this long after the last edge
-  read_interval: 60s
+  mode: clocked
+  read_interval: 60s       # 15 s or more — faster and the E-Series holds its reading
 
 sensor:
   - platform: badger_meter
     meter_reading:
-      name: "Water Meter Reading"
+      name: "Water Meter"
+      unit_of_measurement: "ft³"
+      device_class: water
+      state_class: total_increasing
+      accuracy_decimals: 3
+      filters:
+        - multiply: 0.001  # this unit reports cubic feet with 3 implied decimals
+        # Drop reversals and implausible jumps: TOTAL_INCREASING reads a reversal as a meter
+        # reset, and a mis-framed digit would put a spike in Home Assistant's statistics.
+        - lambda: |-
+            static float last = NAN;
+            if (!std::isnan(last) && (x < last || x - last > 100.0f)) return {};
+            last = x;
+            return x;
     raw_value:
       name: "Water Meter Raw Value"
 
@@ -126,23 +112,49 @@ text_sensor:
       name: "Water Meter Raw String"
     meter_id:
       name: "Water Meter ID"
+
+button:
+  - platform: template
+    name: "Read Water Meter"
+    on_press:
+      - lambda: id(badger_meter_component).request_read();
 ```
+
+**Set the unit and multiplier from your own meter's LCD.** The E-Series is factory-programmed for
+gallons, cubic feet or cubic metres, and the implied decimal depends on the size — compare the
+`RB` field of the raw string with the display before enabling `meter_reading`. A wrong unit
+written into Home Assistant's long-term statistics is painful to undo.
 
 ## Sensors
 
 | Sensor | Type | Description |
-|-----------------|--------|------------------------------------------|
-| `meter_reading` | sensor | Parsed numeric reading from the meter |
-| `raw_value` | sensor | Full numeric value (all digits after 'R') |
-| `raw_string` | text | Complete decoded ASCII string |
-| `meter_id` | text | Meter serial/ID (trailing digits) |
+|---|---|---|
+| `meter_reading` | sensor | The `RB` register value as a number; scale it with a `multiply` filter |
+| `raw_value` | sensor | The same number, unscaled |
+| `raw_string` | text | The complete decoded message |
+| `meter_id` | text | The `IB` field — the meter's serial number |
 
-## Tuning
+Both numeric sensors are 32-bit floats, as all ESPHome sensors are. A 9-digit register loses its
+last digit above ~16.7 million counts (16,777 ft³ at the tested resolution).
 
-- **Reading digits**: the parser defaults to 7 digits for the reading. The split is
-  meter-model-specific and unverified; edit `reading_digits` in `badger_meter.cpp`.
-- **Unit**: gallons, cubic feet or cubic metres depending on the meter's configuration. Apply a
-  `multiply` filter in YAML once a decoded string has established which.
+## How a read works
+
+1. **Reset** — hold the clock line low for 1.2 s (`reset_hold`). This restarts the register's
+   message from the beginning.
+2. **Power up** — hold it high for 3 s (`power_up_time`). Both waits are non-blocking.
+3. **Clock** — toggle the line: 100 µs low, then high, sampling the data line 220 µs after the
+   rising edge; 417 µs per bit, up to 1000 bits (~420 ms, blocking).
+4. **Decode** — try 7E1, 7E2, 8N1, 7N1 and 8E1 in both polarities, keep the best, stop at the
+   first `CR`, and require at least three distinct characters so a stuck or mains-coupled line
+   cannot frame as a repeated character.
+5. **Parse** — `V;RB<reading>;IB<id>;…` or a bare `R<digits>` string.
+
+The tested meter answers 7E1, non-inverted, and decodes identically at 417, 833 and 1000 µs per
+bit, so the rate is not critical.
+
+The component still carries scaffolding from the diagnostic phase — a boot-time pin scan, a
+`passive` capture mode, and options (`bit_period`, `capture_window`, `idle_gap`) that the clocked
+path currently ignores. The clock timing above is fixed in `badger_meter.cpp`.
 
 ## License
 
@@ -155,6 +167,7 @@ See [LICENSE](LICENSE) for full text.
 
 ## Credits
 
-Protocol implementation based on:
-- [kmeter](https://github.com/rszimm/kmeter) by rszimm — original Linux kernel module implementation
+- [kmeter](https://github.com/rszimm/kmeter) by rszimm — the power-as-clock read sequence
 - [sensus_protocol_lib](https://github.com/michlv/sensus_protocol_lib) by michlv — Arduino/ESP8266 port
+- [SCADAmetrics](https://scadametrics.com) — whose public datasheets and compatibility matrix
+  document the Badger colour codes and E-Series quirks that no vendor would
