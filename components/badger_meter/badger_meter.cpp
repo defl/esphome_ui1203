@@ -105,6 +105,8 @@ void BadgerMeterComponent::dump_config() {
     LOG_TEXT_SENSOR("  ", "Raw String", this->raw_string_sensor_);
   if (this->meter_id_sensor_)
     LOG_TEXT_SENSOR("  ", "Meter ID", this->meter_id_sensor_);
+  if (this->flow_rate_sensor_)
+    LOG_SENSOR("  ", "Flow Rate", this->flow_rate_sensor_);
 }
 
 void BadgerMeterComponent::set_state_(ReadState new_state) {
@@ -769,6 +771,25 @@ void BadgerMeterComponent::parse_data_(const std::string &data) {
       if (id_end == std::string::npos)
         id_end = (k_pos != std::string::npos) ? k_pos : data.length();
       this->meter_id_sensor_->publish_state(data.substr(ib_pos + 3, id_end - ib_pos - 3));
+    }
+
+    // Badger E-Series `GC`: instantaneous flow. Measured against successive RB readings it reads
+    // 00 idle, 01 at ~0.44 gpm and 02 at ~1.16 gpm — whole gallons per minute, rounded up, on two
+    // points. Only ever seen as two decimal digits so far; if a letter ever appears the field is
+    // hex and the scale above 9 is unknown, so the value is logged rather than published wrong.
+    const size_t gc_pos = data.find(";GC");
+    if (gc_pos != std::string::npos && this->flow_rate_sensor_ != nullptr) {
+      size_t gc_end = data.find(';', gc_pos + 3);
+      if (gc_end == std::string::npos)
+        gc_end = data.length();
+      const std::string gc_str = data.substr(gc_pos + 3, gc_end - gc_pos - 3);
+      char *gc_parsed;
+      const long gc = strtol(gc_str.c_str(), &gc_parsed, 10);
+      if (!gc_str.empty() && *gc_parsed == '\0') {
+        this->flow_rate_sensor_->publish_state(static_cast<float>(gc));
+      } else {
+        ESP_LOGW(TAG, "GC field '%s' is not decimal — not published", gc_str.c_str());
+      }
     }
 
   } else {

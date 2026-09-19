@@ -67,6 +67,8 @@ sensor:
             return x;
     raw_value:
       name: "Water Meter Raw Value"
+    flow_rate:
+      name: "Water Meter Flow Rate"   # E-Series GC field, whole gal/min
 
 text_sensor:
   - platform: badger_meter

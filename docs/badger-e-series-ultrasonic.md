@@ -136,6 +136,10 @@ Both steady points fit whole gallons per minute rounded up (0.44 → 1, 1.16 →
 would give 0 and 1. Two points do not prove the scale — a third, well above 2 gpm, would. `M1D`
 held `0200,000000` throughout.
 
+The component publishes `GC` as the `flow_rate` sensor in gal/min. It has only ever been seen as
+two decimal digits; if a letter appears the field is hex, so the component logs a warning and
+publishes nothing rather than a wrong value.
+
 Badger's E-Series G2 manual does say the extended encoder message can carry alarms, temperature,
 pressure and maximum flow rate, and lists its alarm codes as a hex bitmask (`001` empty pipe …
 `200` exceeding max flow). Whether any of that is in `M1D` is not established.

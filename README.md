@@ -76,6 +76,8 @@ sensor:
             return x;
     raw_value:
       name: "Water Meter Raw Value"
+    flow_rate:
+      name: "Water Meter Flow Rate"
 
 text_sensor:
   - platform: badger_meter
@@ -103,6 +105,7 @@ complete device file.
 |---|---|---|
 | `meter_reading` | sensor | The register reading as a number; scale it with a `multiply` filter |
 | `raw_value` | sensor | The same number, unscaled |
+| `flow_rate` | sensor | Instantaneous flow in gal/min, from the E-Series `GC` field — see the docs for how it was established |
 | `raw_string` | text | The complete decoded message |
 | `meter_id` | text | The meter's ID field |
 

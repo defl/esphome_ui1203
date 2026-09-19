@@ -85,6 +85,7 @@ class BadgerMeterComponent : public Component {
   void set_raw_value_sensor(sensor::Sensor *sensor) { this->raw_value_sensor_ = sensor; }
   void set_raw_string_sensor(text_sensor::TextSensor *sensor) { this->raw_string_sensor_ = sensor; }
   void set_meter_id_sensor(text_sensor::TextSensor *sensor) { this->meter_id_sensor_ = sensor; }
+  void set_flow_rate_sensor(sensor::Sensor *sensor) { this->flow_rate_sensor_ = sensor; }
 
   // Trigger a read manually (e.g., from a lambda or button)
   void request_read() { this->read_requested_ = true; }
@@ -142,6 +143,7 @@ class BadgerMeterComponent : public Component {
   sensor::Sensor *raw_value_sensor_{nullptr};
   text_sensor::TextSensor *raw_string_sensor_{nullptr};
   text_sensor::TextSensor *meter_id_sensor_{nullptr};
+  sensor::Sensor *flow_rate_sensor_{nullptr};
 
   // Scan results are kept rather than logged where they are taken: setup() output has already
   // scrolled away by the time anything attaches to the log stream, while dump_config() is
