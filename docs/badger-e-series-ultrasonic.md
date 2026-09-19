@@ -20,6 +20,7 @@ taken from a named, publicly available source.
 | Cable colours | red, black, white — no green |
 | Colour code | **Itron ERT variant**: black = clock/power, red = data, white = common |
 | Register units | cubic feet, three implied decimals (factory-programmed) |
+| Acquired | bought on eBay, February 2026, $75 plus shipping |
 
 Badger's manual says the output protocol "is indicated on the AMR output wire and is determined at
 the time of order", and that the meter "may be ordered with either a Badger Meter 308 in-line
@@ -27,9 +28,32 @@ connector or an Itron connector". SCADAmetrics adds that the register "requires 
 pre-programming. Specify 'High-Resolution E-Series ADE Meter Mode'" — consistent with the `HR`
 label.
 
+## Colour codes
+
+Badger ships the encoder cable in **two colour codes**, and a red/black/white cable fits both:
+
+| Function | Standard (Sensus) code | **Itron ERT cable** |
+|---|---|---|
+| Clock / power | Red | **Black** |
+| Data (open collector) | Green — sometimes White | **Red** |
+| Common | Black | **White / shield** |
+
+This meter uses the **Itron ERT** code. Wired to the standard code instead, its clock input sat on
+ground: it never answered at any rate or voltage, and the floating lines picked up 60 Hz mains
+that looked like a signal.
+
+Sources: SCADAmetrics' [EtherMeter compatibility matrix](https://scadametrics.com/PDF/Compatibility_Matrix_209.pdf)
+("On certain Badger Meters that are built to be connected to an Itron ERT… BLACK=TX, RED=RX,
+DRAIN=CMN"), and the wiring tables in the [TheMeterDisplay](https://scadametrics.com/PDF/TMD_v5.pdf)
+and [Signalizer](https://scadametrics.com/PDF/EMP_vEVOQ4.pdf) datasheets, which also note that
+"manufacturers occasionally substitute a WHITE wire for a GREEN wire".
+
 ### Diode test
 
-Meter disconnected, DMM in diode mode, red probe on the first wire:
+Tells the two codes apart without powering anything: the data output's transistor has a body diode
+from its common to its collector, so the only junction to find is **common (+) → data (−),
+~0.5 V**. Meter disconnected, DMM in diode mode (a few volts at ~1 mA — harmless), red probe on
+the first wire:
 
 | | reading |
 |---|---|
@@ -42,6 +66,22 @@ One junction, from common to data: the body diode of the open-collector output t
 the standard colour code the same diode would have appeared as Black → White, which reads open.
 Black isolated in both directions is typical of a power/clock input feeding a rectifier and
 regulator.
+
+## Wiring used
+
+On an ESP32 (rev 3.1, esp-idf):
+
+| Meter wire (Itron code) | Function | ESP32 |
+|---|---|---|
+| **Black** | clock and power | **GPIO16**, driven directly |
+| **Red** | data, open collector | **GPIO17** + 7.5 kΩ pull-up to 3.3 V |
+| **White** | common | **GND** |
+
+- **3.3 V straight from a GPIO is enough** — no level shifter, no 5 V; the pin powers the encoder
+  interface directly. SCADAmetrics' TheMeterDisplay likewise reads Badger registers from a single
+  ~3.2 V lithium cell.
+- **Keep the cable short.** SCADAmetrics reports problems communicating with this meter on "medium
+  to long" encoder cable runs.
 
 ## Electrical
 
@@ -78,8 +118,27 @@ V;RB003549269;IB0017118249;GC00;M1D0200,000000<CR>
 | `V` | | message start |
 | `RB` | `003549269` | register reading, 9 digits. Here **3,549.269 ft³**, confirmed against the LCD (`003549.269 ft³`) |
 | `IB` | `0017118249` | meter serial number — matches the number stamped on the meter |
-| `GC` | `00` | not decoded; probably a status or alarm code |
-| `M1D` | `0200,000000` | not decoded; probably the E-Series extended status Badger sends to ORION endpoints |
+| `GC` | `00` | **instantaneous flow rate** — consistent with whole gallons per minute, rounded up (see below) |
+| `M1D` | `0200,000000` | not decoded; static — did not change with flow. Probably part of the E-Series extended message |
+
+### `GC` against measured flow
+
+A tap run at two steady rates, with the true rate taken from successive `RB` readings:
+
+| Condition | Measured rate | `GC` |
+|---|---|---|
+| no flow | 0 | `00` |
+| tap opening | transient | `03` |
+| steady, low | 0.064 ft³ per 65 s ≈ **0.44 gpm** | `01` |
+| steady, higher | 0.168 ft³ per 65 s ≈ **1.16 gpm** | `02` |
+
+Both steady points fit whole gallons per minute rounded up (0.44 → 1, 1.16 → 2); plain rounding
+would give 0 and 1. Two points do not prove the scale — a third, well above 2 gpm, would. `M1D`
+held `0200,000000` throughout.
+
+Badger's E-Series G2 manual does say the extended encoder message can carry alarms, temperature,
+pressure and maximum flow rate, and lists its alarm codes as a hex bitmask (`001` empty pipe …
+`200` exceeding max flow). Whether any of that is in `M1D` is not established.
 
 ### Register resolution by meter size
 
@@ -90,6 +149,25 @@ factory, so read your own LCD.
 |---|---|---|---|
 | 5/8" – 1" | 0.01 | 0.001 | 0.0001 |
 | 1-1/2" – 2" | 0.1 | 0.01 | 0.001 |
+
+## Home Assistant configuration used
+
+This meter's `RB` is cubic feet with three implied decimals — `003549269` read `003549.269 ft³` on
+the LCD — so its reading sensor is:
+
+```yaml
+    meter_reading:
+      name: "Water Meter"
+      unit_of_measurement: "ft³"
+      device_class: water
+      state_class: total_increasing
+      accuracy_decimals: 3
+      filters:
+        - multiply: 0.001
+```
+
+plus the reversal/jump guard from the README. At 32-bit float precision the third decimal becomes
+approximate above ~10,000 ft³ and is lost above ~16,384 ft³.
 
 ## Traps
 

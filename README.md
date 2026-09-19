@@ -1,17 +1,12 @@
 # Badger Water Meter ESPHome Component
 
-ESPHome external component for reading Badger water meters over the three-wire **Sensus
-(UI-1203) encoder protocol** — the same interface AMR/AMI endpoints use.
+ESPHome external component that reads Badger water meters over the three-wire **Sensus (UI-1203)
+encoder protocol** — the same interface AMR/AMI endpoints use.
 
 **Status: working** on a Badger E-Series® Ultrasonic meter with the HR (high-resolution) encoder
-output, reading every 60 s into Home Assistant since 2026-09-18:
-
-```
-V;RB003549269;IB0017118249;GC00;M1D0200,000000
-```
-
-That is 3,549.269 ft³, matching the meter's own LCD. Full details of the meter, the message and
-the timings are in [docs/badger-e-series-ultrasonic.md](docs/badger-e-series-ultrasonic.md).
+output, reading into Home Assistant every 60 s. Everything specific to that meter — its cable
+colour codes, electrical and timing details, and the message fields — is in
+[docs/badger-e-series-ultrasonic.md](docs/badger-e-series-ultrasonic.md).
 
 > **Independent project.** Not affiliated with or endorsed by Badger Meter or any other company
 > named here; all product names are trademarks of their respective owners, used only to describe
@@ -19,49 +14,22 @@ the timings are in [docs/badger-e-series-ultrasonic.md](docs/badger-e-series-ult
 > output of a meter the author owns. Provided as-is, without warranty. See
 > [Disclaimer](#disclaimer).
 
-## Check your cable's colour code first
+## Before you wire anything
 
-This cost a full day. Badger ships the encoder cable in **two colour codes**, and a
-red/black/white cable fits both:
-
-| Function | Standard (Sensus) code | **Itron ERT cable** |
-|---|---|---|
-| Clock / power | Red | **Black** |
-| Data (open collector) | Green — sometimes White | **Red** |
-| Common | Black | **White / shield** |
-
-The tested meter uses the **Itron ERT** code. Wired to the standard code instead, its clock input
-sat on ground: it never answered at any rate or voltage, and the floating lines picked up 60 Hz
-mains that looked like a signal.
-
-**Tell them apart with a DMM diode test**, meter disconnected (a few volts at ~1 mA, harmless).
-The data output's transistor has a body diode from its common to its collector, so the only
-junction you should find is **common (+) → data (−), ~0.5 V**. On the tested meter:
-white (+) → red (−) = 0.527 V, every other pair open in both directions.
-
-Sources: SCADAmetrics' [EtherMeter compatibility matrix](https://scadametrics.com/PDF/Compatibility_Matrix_209.pdf)
-("On certain Badger Meters that are built to be connected to an Itron ERT… BLACK=TX, RED=RX,
-DRAIN=CMN"), and the wiring tables in the
-[TheMeterDisplay](https://scadametrics.com/PDF/TMD_v5.pdf) and
-[Signalizer](https://scadametrics.com/PDF/EMP_vEVOQ4.pdf) datasheets.
+**Badger ships its encoder cable in more than one colour code, and they are easy to confuse.** On
+the tested meter, wiring to the wrong code left the clock input on ground: the meter never
+answered, and the floating lines looked deceptively alive. Identify your cable's clock, data and
+common conductors first — the docs describe the codes and a DMM test that tells them apart.
 
 ## Wiring
 
-Tested on an ESP32 (ESP32 rev 3.1, esp-idf):
+| Meter signal | ESP32 |
+|---|---|
+| Clock / power | a GPIO, driven directly (`clock_pin`) |
+| Data — open collector | a GPIO input (`data_pin`), plus an **external 4.7–10 kΩ pull-up to 3.3 V** |
+| Common | GND |
 
-| Meter wire (Itron code) | Function | ESP32 |
-|---|---|---|
-| **Black** | clock and power | **GPIO16**, driven directly |
-| **Red** | data, open collector | **GPIO17** + external pull-up to 3.3 V (7.5 kΩ used; 4.7–10 kΩ is fine) |
-| **White** | common | **GND** |
-
-- **3.3 V straight from a GPIO is enough** — no level shifter, no 5 V; the pin powers the encoder
-  interface directly. SCADAmetrics' TheMeterDisplay likewise reads Badger registers from a single
-  ~3.2 V lithium cell.
-- **Use an external pull-up.** The ESP32's internal ~45 kΩ is too weak against mains coupling on
-  a cable run.
-- **Keep the cable short.** SCADAmetrics reports communication problems with this meter on
-  "medium to long" encoder cable runs.
+The internal pull-up alone is too weak against mains coupling on a cable run.
 
 ## Installation
 
@@ -77,31 +45,28 @@ external_components:
 
 ## Configuration
 
-The configuration running on the tested meter. See [badger_meter.yaml](badger_meter.yaml) for a
-complete device file.
-
 ```yaml
 badger_meter:
   id: badger_meter_component
-  clock_pin: GPIO16        # meter BLACK (Itron code): power and clock
+  clock_pin: GPIO16
   data_pin:
-    number: GPIO17         # meter RED (Itron code): open-collector data
+    number: GPIO17
     mode:
       input: true
       pullup: true
   mode: clocked
-  read_interval: 60s       # 15 s or more — faster and the E-Series holds its reading
+  read_interval: 60s
 
 sensor:
   - platform: badger_meter
     meter_reading:
       name: "Water Meter"
-      unit_of_measurement: "ft³"
+      unit_of_measurement: "ft³"     # from your meter's display
       device_class: water
       state_class: total_increasing
       accuracy_decimals: 3
       filters:
-        - multiply: 0.001  # this unit reports cubic feet with 3 implied decimals
+        - multiply: 0.001            # from your meter's display
         # Drop reversals and implausible jumps: TOTAL_INCREASING reads a reversal as a meter
         # reset, and a mis-framed digit would put a spike in Home Assistant's statistics.
         - lambda: |-
@@ -126,41 +91,39 @@ button:
       - lambda: id(badger_meter_component).request_read();
 ```
 
-**Set the unit and multiplier from your own meter's LCD.** The E-Series is factory-programmed for
-gallons, cubic feet or cubic metres, and the implied decimal depends on the size — compare the
-`RB` field of the raw string with the display before enabling `meter_reading`. A wrong unit
-written into Home Assistant's long-term statistics is painful to undo.
+**Take the unit and multiplier from your own meter's display.** Badger factory-programs gallons,
+cubic feet or cubic metres at a size-dependent resolution; compare the reading field of the raw
+string with the LCD before enabling `meter_reading`, because a wrong unit written into Home
+Assistant's long-term statistics is painful to undo. [badger_meter.yaml](badger_meter.yaml) is a
+complete device file.
 
 ## Sensors
 
 | Sensor | Type | Description |
 |---|---|---|
-| `meter_reading` | sensor | The `RB` register value as a number; scale it with a `multiply` filter |
+| `meter_reading` | sensor | The register reading as a number; scale it with a `multiply` filter |
 | `raw_value` | sensor | The same number, unscaled |
 | `raw_string` | text | The complete decoded message |
-| `meter_id` | text | The `IB` field — the meter's serial number |
+| `meter_id` | text | The meter's ID field |
 
-Both numeric sensors are 32-bit floats, as all ESPHome sensors are. A 9-digit register loses its
-last digit above ~16.7 million counts (16,777 ft³ at the tested resolution).
+Both numeric sensors are 32-bit floats, as all ESPHome sensors are, so a 9-digit register loses
+its last digit above ~16.7 million counts.
 
 ## How a read works
 
-1. **Reset** — hold the clock line low for 1.2 s (`reset_hold`). This restarts the register's
+1. **Reset** — the clock line is held low (`reset_hold`, default 1.2 s), restarting the register's
    message from the beginning.
-2. **Power up** — hold it high for 3 s (`power_up_time`). Both waits are non-blocking.
-3. **Clock** — toggle the line: 100 µs low, then high, sampling the data line 220 µs after the
-   rising edge; 417 µs per bit, up to 1000 bits (~420 ms, blocking).
-4. **Decode** — try 7E1, 7E2, 8N1, 7N1 and 8E1 in both polarities, keep the best, stop at the
-   first `CR`, and require at least three distinct characters so a stuck or mains-coupled line
-   cannot frame as a repeated character.
-5. **Parse** — `V;RB<reading>;IB<id>;…` or a bare `R<digits>` string.
+2. **Power up** — held high (`power_up_time`, default 3 s). Both waits are non-blocking.
+3. **Clock** — the line is toggled once per bit and the data line sampled after each rising edge,
+   up to 1000 bits (~420 ms, blocking).
+4. **Decode** — 7E1, 7E2, 8N1, 7N1 and 8E1 are tried in both polarities; the best result is kept
+   up to the first `CR`, and it must contain at least three distinct characters, so a stuck or
+   mains-coupled line cannot frame as a repeated character.
+5. **Parse** — `V;RB<reading>;IB<id>;…`, or a bare `R<digits>` string.
 
-The tested meter answers 7E1, non-inverted, and decodes identically at 417, 833 and 1000 µs per
-bit, so the rate is not critical.
-
-The component still carries scaffolding from the diagnostic phase — a boot-time pin scan, a
+The component still carries scaffolding from its diagnostic phase — a boot-time pin scan, a
 `passive` capture mode, and options (`bit_period`, `capture_window`, `idle_gap`) that the clocked
-path currently ignores. The clock timing above is fixed in `badger_meter.cpp`.
+path currently ignores; the clock timing is fixed in `badger_meter.cpp`.
 
 ## Disclaimer
 
