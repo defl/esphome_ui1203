@@ -13,6 +13,12 @@ V;RB003549269;IB0017118249;GC00;M1D0200,000000
 That is 3,549.269 ft³, matching the meter's own LCD. Full details of the meter, the message and
 the timings are in [docs/badger-e-series-ultrasonic.md](docs/badger-e-series-ultrasonic.md).
 
+> **Independent project.** Not affiliated with or endorsed by Badger Meter or any other company
+> named here; all product names are trademarks of their respective owners, used only to describe
+> compatibility. Built solely from publicly available documents and from observing the external
+> output of a meter the author owns. Provided as-is, without warranty. See
+> [Disclaimer](#disclaimer).
+
 ## Check your cable's colour code first
 
 This cost a full day. Badger ships the encoder cable in **two colour codes**, and a
@@ -156,6 +162,42 @@ The component still carries scaffolding from the diagnostic phase — a boot-tim
 `passive` capture mode, and options (`bit_period`, `capture_window`, `idle_gap`) that the clocked
 path currently ignores. The clock timing above is fixed in `badger_meter.cpp`.
 
+## Disclaimer
+
+**Independent project.** This project is not affiliated with, endorsed by, sponsored by or
+supported by Badger Meter, Inc., Sensus / Xylem Inc., Itron, Inc., Elster / Honeywell, Neptune
+Technology Group, SCADAmetrics, or any other company or organisation named in it.
+
+**Trademarks.** Badger Meter, E-Series, ORION, BEACON, ADE and HR-E are trademarks of Badger
+Meter, Inc. Sensus and ICE are trademarks of Sensus (Xylem Inc.). Itron and ERT are trademarks of
+Itron, Inc. EtherMeter, TheMeterDisplay and Signalizer are trademarks of SCADAmetrics. All other
+product names, company names and trademarks are the property of their respective owners. They
+appear here only to identify the equipment this component was tested with and the documents that
+were consulted; no endorsement is implied.
+
+**How this information was obtained.** Everything in this project comes from:
+
+1. **Publicly available documents** — manufacturer manuals and datasheets, third-party product
+   documentation, and expired patents — each linked where it is used. No vendor document is copied
+   or redistributed here; short quotations are included only to identify the source of a fact, and
+   all rights in those documents remain with their owners.
+2. **Observation of a meter the author owns**, through its external output cable, used as that
+   cable is intended: supplying power and a clock, and reading the data line. The meter was not
+   opened. Its firmware was not read, extracted, decompiled or modified. No encryption, access
+   control or other technical protection measure was circumvented.
+
+No confidential, proprietary or non-disclosure-agreement information was used. The purpose is
+interoperability: reading a meter the author owns into the author's own home-automation system.
+
+**No warranty.** This software and documentation are provided "as is", without warranty of any
+kind; see [LICENSE](LICENSE). Nothing here is suitable for billing, revenue or custody-transfer
+metering. Connecting equipment to a meter can damage it or void its warranty, and the wiring
+described here was verified on one meter only — check your own cable before connecting anything.
+
+**Only connect to meters you own or are authorised to use.** Meters installed by a water utility
+are usually the utility's property, and connecting to or interfering with them may be prohibited
+by the utility's terms of service or by law.
+
 ## License
 
 This project uses the same dual-license as ESPHome:
@@ -170,4 +212,4 @@ See [LICENSE](LICENSE) for full text.
 - [kmeter](https://github.com/rszimm/kmeter) by rszimm — the power-as-clock read sequence
 - [sensus_protocol_lib](https://github.com/michlv/sensus_protocol_lib) by michlv — Arduino/ESP8266 port
 - [SCADAmetrics](https://scadametrics.com) — whose public datasheets and compatibility matrix
-  document the Badger colour codes and E-Series quirks that no vendor would
+  document the Badger colour codes and E-Series behaviour
