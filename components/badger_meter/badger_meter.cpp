@@ -357,17 +357,18 @@ struct ClockProfile {
 // The line needs ~100 us to recover after power returns, so anything earlier reads the recovery
 // rather than the bit. Where the register actually presents the bit inside the high phase is the
 // open variable now, so that is what these sweep: same period, different sampling instants.
-// Everything from 1 to 5 ms has been tried and the register stays idle. kmeter calls 1 ms
-// "about as fast as I can get", which says nothing about how slow these things can want to be —
-// and this is a battery-powered meter whose own logic may be far slower than a mains reader's.
-// So: down to 50 ms per bit, at the cost of only a handful of bits per read.
+// 1 to 50 ms per bit has all been tried and the register stays idle. The original protocol patent
+// (US5155481) specifies the three-wire clock as 1200 or 2400 Hz — 833 or 417 us per bit — which is
+// FASTER than anything tried. Recovery after a rising edge is ~100 us, so 417 us leaves a thin but
+// usable window; 833 us is comfortable.
 static const ClockProfile CLOCK_SWEEP[] = {
-    {2000, 200, 300},     {10000, 1000, 3000},   {20000, 2000, 5000},
-    {50000, 5000, 10000}, {20000, 10000, 5000},  {50000, 25000, 10000},
+    {833, 417, 300}, {417, 208, 160}, {833, 417, 380},
+    {833, 200, 450}, {417, 100, 220}, {1000, 500, 300},
 };
 static const int SWEEP_LEN = sizeof(CLOCK_SWEEP) / sizeof(CLOCK_SWEEP[0]);
-// Half the old count: the blocking phase is the cost, and 200 bits is 20 characters.
-static const int CLOCK_BITS_PER_READ = 200;
+// The patent puts a message at 23 to 34 bytes; at 11 bits a character that is 253 to 374 bits.
+// 200 could stop short of the reading entirely. The 500 ms budget still bounds the block.
+static const int CLOCK_BITS_PER_READ = 400;
 // The clock phase blocks the loop, and this board runs a 1 s pressure check, so a slow profile
 // gets fewer bits rather than a longer block. 10 ms/bit x 200 would have been two seconds.
 static const uint32_t CLOCK_BUDGET_US = 500000;
@@ -489,15 +490,15 @@ void BadgerMeterComponent::report_bits_() {
   }
 }
 
-DecodeResult BadgerMeterComponent::decode_bits_once_(bool inverted, int data_bits,
-                                                     bool parity) const {
+DecodeResult BadgerMeterComponent::decode_bits_once_(bool inverted, int data_bits, bool parity,
+                                                     int stop_bits) const {
   DecodeResult out;
   out.inverted = inverted;
   out.data_bits = data_bits;
   out.parity = parity;
   out.bit_us = this->bit_period_us_;
 
-  const int frame = 1 + data_bits + (parity ? 1 : 0) + 1;
+  const int frame = 1 + data_bits + (parity ? 1 : 0) + stop_bits;
   int i = 0;
   while (i + frame <= this->num_bits_) {
     const bool start = inverted ? !this->bits_[i] : (bool) this->bits_[i];
@@ -526,11 +527,13 @@ DecodeResult BadgerMeterComponent::decode_bits_once_(bool inverted, int data_bit
       if ((ones % 2) != 0)
         ok = false;
     }
-    bool stop = this->bits_[i + frame - 1] != 0;
-    if (inverted)
-      stop = !stop;
-    if (!stop)
-      ok = false;
+    for (int s = 0; s < stop_bits; s++) {
+      bool stop = this->bits_[i + frame - 1 - s] != 0;
+      if (inverted)
+        stop = !stop;
+      if (!stop)
+        ok = false;
+    }
 
     if (!ok) {
       out.errors++;
@@ -553,12 +556,16 @@ DecodeResult BadgerMeterComponent::decode_bits_once_(bool inverted, int data_bit
 
 DecodeResult BadgerMeterComponent::decode_bits_best_() const {
   DecodeResult best;
-  const int data_bits[4] = {7, 8, 7, 8};
-  const bool parity[4] = {true, false, false, true};
+  // 7E2 first: the Rockwell/Sensus patents (US5155481, US5252967) specify a start bit, seven
+  // data bits LSB-first, a parity bit and TWO stop bits. kmeter and sensus_protocol_lib both
+  // assume one, which would misframe every character after the first.
+  const int data_bits[5] = {7, 7, 8, 7, 8};
+  const bool parity[5] = {true, true, false, false, true};
+  const int stop_bits[5] = {2, 1, 1, 1, 1};
   for (int inverted = 0; inverted < 2; inverted++) {
-    for (int f = 0; f < 4; f++) {
+    for (int f = 0; f < 5; f++) {
       const DecodeResult candidate =
-          this->decode_bits_once_(inverted != 0, data_bits[f], parity[f]);
+          this->decode_bits_once_(inverted != 0, data_bits[f], parity[f], stop_bits[f]);
       if (candidate.score() > best.score())
         best = candidate;
     }

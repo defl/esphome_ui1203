@@ -158,7 +158,7 @@ class BadgerMeterComponent : public Component {
   void report_bits_();
   DecodeResult decode_best_();
   DecodeResult decode_bits_best_() const;
-  DecodeResult decode_bits_once_(bool inverted, int data_bits, bool parity) const;
+  DecodeResult decode_bits_once_(bool inverted, int data_bits, bool parity, int stop_bits) const;
   bool level_at_(uint32_t offset_us) const;
   DecodeResult decode_once_(uint32_t bit_us, bool inverted, int data_bits, bool parity) const;
   void parse_data_(const std::string &data);
