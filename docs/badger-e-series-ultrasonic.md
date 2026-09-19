@@ -6,7 +6,7 @@ taken from a named, publicly available source.
 
 > **Independent project.** Not affiliated with or endorsed by Badger Meter or any other company
 > named here; all product names are trademarks of their respective owners, used only to describe
-> compatibility. See [Disclaimer](#disclaimer) at the end of this page.
+> compatibility. See the [Disclaimer in the README](../README.md#disclaimer).
 
 ## The meter
 
@@ -127,28 +127,4 @@ Meters* (current edition C707-22). It is paywalled and was not used here.
 
 ## Disclaimer
 
-**Independent project.** This page and the project it belongs to are not affiliated with,
-endorsed by, sponsored by or supported by Badger Meter, Inc., Sensus / Xylem Inc., Itron, Inc.,
-Elster / Honeywell, Neptune Technology Group, SCADAmetrics, AWWA, or any other company or
-organisation named here.
-
-**Trademarks.** Badger Meter, E-Series, ORION, BEACON, ADE and HR-E are trademarks of Badger
-Meter, Inc. Sensus and ICE are trademarks of Sensus (Xylem Inc.). Itron and ERT are trademarks of
-Itron, Inc. EtherMeter, TheMeterDisplay and Signalizer are trademarks of SCADAmetrics. All other
-product names, company names and trademarks are the property of their respective owners, and
-appear here only to identify the tested equipment and the documents consulted. No endorsement is
-implied.
-
-**How this information was obtained.** Only from the publicly available documents listed under
-Sources, each linked rather than copied, with short quotations used solely to identify where a
-fact comes from; from observing the external output cable of a meter the author owns, used as
-intended — the meter was not opened, its firmware was not read, extracted, decompiled or
-modified, and no technical protection measure was circumvented. No confidential,
-proprietary or non-disclosure-agreement information was used. The purpose is interoperability with
-the author's own home-automation system.
-
-**No warranty.** Provided "as is", without warranty of any kind. Not suitable for billing, revenue
-or custody-transfer metering. Wiring anything to a meter can damage it or void its warranty; the
-findings here were verified on one meter only. **Only connect to meters you own or are authorised
-to use** — utility-installed meters are usually the utility's property, and connecting to them may
-be prohibited by the utility's terms or by law.
+The [Disclaimer in the README](../README.md#disclaimer) applies to this page in full.

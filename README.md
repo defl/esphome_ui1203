@@ -164,9 +164,11 @@ path currently ignores. The clock timing above is fixed in `badger_meter.cpp`.
 
 ## Disclaimer
 
+This disclaimer covers the whole project, including everything under `docs/`.
+
 **Independent project.** This project is not affiliated with, endorsed by, sponsored by or
 supported by Badger Meter, Inc., Sensus / Xylem Inc., Itron, Inc., Elster / Honeywell, Neptune
-Technology Group, SCADAmetrics, or any other company or organisation named in it.
+Technology Group, SCADAmetrics, AWWA, or any other company or organisation named in it.
 
 **Trademarks.** Badger Meter, E-Series, ORION, BEACON, ADE and HR-E are trademarks of Badger
 Meter, Inc. Sensus and ICE are trademarks of Sensus (Xylem Inc.). Itron and ERT are trademarks of
