@@ -8,12 +8,6 @@ output, reading into Home Assistant every 60 s. Everything specific to that mete
 colour codes, electrical and timing details, and the message fields — is in
 [docs/badger-e-series-ultrasonic.md](docs/badger-e-series-ultrasonic.md).
 
-> **Independent project.** Not affiliated with or endorsed by Badger Meter or any other company
-> named here; all product names are trademarks of their respective owners, used only to describe
-> compatibility. Built solely from publicly available documents and from observing the external
-> output of a meter the author owns. Provided as-is, without warranty. See
-> [Disclaimer](#disclaimer).
-
 ## Before you wire anything
 
 **Badger ships its encoder cable in more than one colour code, and they are easy to confuse.** On

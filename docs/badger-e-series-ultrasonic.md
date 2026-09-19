@@ -4,10 +4,6 @@ Everything established about the meter this component was developed against. Bad
 publish the encoder's electrical interface, so every fact here is either measured on this unit or
 taken from a named, publicly available source.
 
-> **Independent project.** Not affiliated with or endorsed by Badger Meter or any other company
-> named here; all product names are trademarks of their respective owners, used only to describe
-> compatibility. See the [Disclaimer in the README](../README.md#disclaimer).
-
 ## The meter
 
 | | |
@@ -122,6 +118,25 @@ V;RB003549269;IB0017118249;GC00;M1D0200,000000<CR>
 | `GC` | `00` | **instantaneous flow rate** — consistent with whole gallons per minute, rounded up (see below) |
 | `M1D` | `0200,000000` | not decoded; static — likely configuration or identity data rather than a measurement (see below) |
 
+### Where `GC` and `M1D` come from
+
+`V`, `RB` and `IB` are the Sensus protocol's base message; `GC` and `M1D` are not part of it.
+Sensus's [iPERL manual](https://www.manualslib.com/manual/1415987/Sensus-Iperl.html?page=13)
+describes three reading-string modes a register can be set to:
+
+| Mode | Contents |
+|---|---|
+| Normal | reading and meter ID only |
+| Fixed | reading and an 8-digit customer ID |
+| Extended | adds "information such as the manufacturer fields and/or meter register specific data" |
+
+This meter's message fits the extended mode, with `GC` and `M1D` as Badger's own fields. The only
+extensions SCADAmetrics' [Minimum Sensus Protocol](https://www.scadametrics.com/PDF/Minimum_Sensus_Protocol_2025_01.pdf)
+paper names as defined by Sensus are an `NB` field for non-billable digits and a multiplier and
+units suffix on `RB` (`RB123456789,-1,04`); this meter sends neither. No public document from
+Badger, Sensus, Itron, Neptune, Aclara or SCADAmetrics, and no public code, was found that defines
+`GC` or `M1D` — the reading of `GC` below is measured, not documented.
+
 ### `GC` against measured flow
 
 A tap run at two steady rates, with the true rate taken from successive `RB` readings:
@@ -148,8 +163,8 @@ extended encoder message can carry alarms, temperature, pressure and maximum flo
 its alarm codes as a hex bitmask ending `200` = exceeding max flow — which `0200` resembles. But
 the alarm reading does not hold: E-Series meters show an alarm screen whenever an alarm is present,
 and this meter shows none. And as a likely first-generation unit, the G2 code table may not apply
-to it at all. With no firmware screen to compare against either, `M1D` stays undecoded: most
-plausibly a firmware, model or size code.
+to it at all. With no firmware screen to compare against either, and no public definition of the
+field, `M1D` stays undecoded: most plausibly a firmware, model or size code.
 
 ### Register resolution by meter size
 
@@ -204,7 +219,11 @@ Meters* (current edition C707-22). It is paywalled and was not used here.
   warning), [EtherMeter manual](https://scadametrics.com/PDF/EtherMeter_Manual_208x.pdf)
   (7E1 framing, `V;RB…;IB…` sample), [TheMeterDisplay](https://scadametrics.com/PDF/TMD_v5.pdf) and
   [Signalizer](https://scadametrics.com/PDF/EMP_vEVOQ4.pdf) datasheets (colour tables, ~3 V
-  battery-powered reader), [Application Note Badger.1](https://scadametrics.com/PDF/Badger_SCADAmetrics_01.pdf)
+  battery-powered reader), [Application Note Badger.1](https://scadametrics.com/PDF/Badger_SCADAmetrics_01.pdf),
+  [Minimum Sensus Protocol](https://www.scadametrics.com/PDF/Minimum_Sensus_Protocol_2025_01.pdf)
+  (the `NB`, multiplier and units fields)
+- Sensus — [iPERL technical manual](https://www.manualslib.com/manual/1415987/Sensus-Iperl.html?page=13)
+  (normal, fixed and extended reading strings)
 - Badger Meter — [E-Series Ultrasonic installation and operation manual](https://metervalveandcontrol.com/pdf/water-meters/11-Ultra/01e-BADGER%20E%20SERIES%20IOM.pdf),
   [HR-E LCD encoder manual](https://www.instrumart.com/assets/HR-E-manual.pdf)
 - Patents — [US 5155481](https://patents.google.com/patent/US5155481A/en) and
