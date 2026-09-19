@@ -48,7 +48,6 @@ badger_meter:
     mode:
       input: true
       pullup: true
-  mode: clocked
   read_interval: 60s
 
 sensor:
@@ -93,6 +92,14 @@ string with the LCD before enabling `meter_reading`, because a wrong unit writte
 Assistant's long-term statistics is painful to undo. [badger_meter.yaml](badger_meter.yaml) is a
 complete device file.
 
+| Option | Default | |
+|---|---|---|
+| `clock_pin` | required | drives the meter's clock/power line |
+| `data_pin` | required | reads the meter's data line |
+| `read_interval` | `60s` | keep it at 15 s or more — polled faster, the E-Series holds its reading |
+| `reset_hold` | `1200ms` | how long the clock is held low to restart the register's message |
+| `power_up_time` | `3s` | how long the clock is held high before clocking |
+
 ## Sensors
 
 | Sensor | Type | Description |
@@ -111,16 +118,17 @@ its last digit above ~16.7 million counts.
 1. **Reset** — the clock line is held low (`reset_hold`, default 1.2 s), restarting the register's
    message from the beginning.
 2. **Power up** — held high (`power_up_time`, default 3 s). Both waits are non-blocking.
-3. **Clock** — the line is toggled once per bit and the data line sampled after each rising edge,
-   up to 1000 bits (~420 ms, blocking).
-4. **Decode** — 7E1, 7E2, 8N1, 7N1 and 8E1 are tried in both polarities; the best result is kept
-   up to the first `CR`, and it must contain at least three distinct characters, so a stuck or
-   mains-coupled line cannot frame as a repeated character.
-5. **Parse** — `V;RB<reading>;IB<id>;…`, or a bare `R<digits>` string.
+3. **Clock** — 1000 bits at 417 µs each (~420 ms, blocking): the line drops for 100 µs, rises, and
+   the data line is sampled 220 µs later.
+4. **Decode** — 7E1, non-inverted, up to the first `CR`. A single framing or parity error discards
+   the whole read, so a dropped character can never shift a digit, and a stuck or mains-coupled
+   line publishes nothing.
+5. **Parse** — `V;RB<reading>;IB<id>;…`. A read without a numeric `RB` publishes nothing. A
+   Sensus multiplier/units suffix on `RB` (`RB123456789,-1,04`) is ignored; the scale comes from
+   the sensor's filters.
 
-The component still carries scaffolding from its diagnostic phase — a boot-time pin scan, a
-`passive` capture mode, and options (`bit_period`, `capture_window`, `idle_gap`) that the clocked
-path currently ignores; the clock timing is fixed in `badger_meter.cpp`.
+The `mode`, `bit_period`, `capture_window` and `idle_gap` options from the diagnostic build are
+still accepted, with a warning, and do nothing.
 
 ## Disclaimer
 

@@ -202,8 +202,8 @@ approximate above ~10,000 ft³ and is lost above ~16,384 ft³.
   the data wire follows the "clock" wire down through the output transistor's junction, and a
   weak pull-up lets 60 Hz mains through. See the diode test above.
 - **Mains coupling frames as clean characters.** A 60 Hz square wave on an undriven line decodes at
-  1200 baud 7E1 as a run of error-free `|` characters. The decoder now refuses any result with
-  fewer than three distinct characters.
+  1200 baud 7E1 as a run of error-free `|` characters. The decoder now discards any read with a
+  single framing or parity error, or without a numeric `RB` field.
 - **The patent says 7E2; the meter says 7E1.** The original Rockwell/Sensus patents specify two
   stop bits and a 1200 or 2400 Hz clock. This register answers 7E1, and is not fussy about rate.
 

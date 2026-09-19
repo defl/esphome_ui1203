@@ -43,7 +43,6 @@ badger_meter:
     mode:
       input: true
       pullup: true
-  mode: clocked
   read_interval: 60s   # 15 s or more; faster and the E-Series holds its reading
 
 sensor:

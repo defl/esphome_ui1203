@@ -2,7 +2,6 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import sensor
 from esphome.const import (
-    CONF_ID,
     DEVICE_CLASS_WATER,
     STATE_CLASS_MEASUREMENT,
     STATE_CLASS_TOTAL_INCREASING,
@@ -10,7 +9,7 @@ from esphome.const import (
     ICON_WATER,
 )
 
-from . import BadgerMeterComponent, CONF_ID as BADGER_CONF_ID, badger_meter_ns
+from . import BadgerMeterComponent
 
 DEPENDENCIES = ["badger_meter"]
 
