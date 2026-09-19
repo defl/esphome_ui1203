@@ -208,7 +208,9 @@ void BadgerMeterComponent::loop() {
         } else {
           ESP_LOGW(TAG, "Clocked read decoded nothing — see the bit dump");
         }
-        this->report_bits_();
+        // The raw dump is for diagnosing a failed read; on a good one it is just noise.
+        if (best.chars < 4)
+          this->report_bits_();
         this->last_read_ms_ = millis();
         this->set_state_(ReadState::IDLE);
         break;
@@ -361,14 +363,17 @@ struct ClockProfile {
 // (US5155481) specifies the three-wire clock as 1200 or 2400 Hz — 833 or 417 us per bit — which is
 // FASTER than anything tried. Recovery after a rising edge is ~100 us, so 417 us leaves a thin but
 // usable window; 833 us is comfortable.
+// First successful reads, 2026-09-18 21:21 CDT, once the wires were moved to the Itron-ERT colour
+// code: 833/200/450, 417/100/220 and 1000/500/300 all decoded the identical message with zero
+// errors, so the register is not fussy about rate. 417 us is kept because it is the fastest,
+// and the whole message has to fit inside the 500 ms blocking budget.
 static const ClockProfile CLOCK_SWEEP[] = {
-    {833, 417, 300}, {417, 208, 160}, {833, 417, 380},
-    {833, 200, 450}, {417, 100, 220}, {1000, 500, 300},
+    {417, 100, 220},
 };
 static const int SWEEP_LEN = sizeof(CLOCK_SWEEP) / sizeof(CLOCK_SWEEP[0]);
-// The patent puts a message at 23 to 34 bytes; at 11 bits a character that is 253 to 374 bits.
-// 200 could stop short of the reading entirely. The 500 ms budget still bounds the block.
-static const int CLOCK_BITS_PER_READ = 400;
+// The E-Series message runs past 40 characters (400 bits cut it off mid-field), so read enough for
+// ~100 at 7E1. At 417 us a bit this is ~420 ms, inside the 500 ms blocking budget.
+static const int CLOCK_BITS_PER_READ = 1000;
 // The clock phase blocks the loop, and this board runs a 1 s pressure check, so a slow profile
 // gets fewer bits rather than a longer block. 10 ms/bit x 200 would have been two seconds.
 static const uint32_t CLOCK_BUDGET_US = 500000;
@@ -546,6 +551,10 @@ DecodeResult BadgerMeterComponent::decode_bits_once_(bool inverted, int data_bit
       out.seen[value >> 5] |= (1U << (value & 31U));
     } else if (value == '\r' || value == '\n') {
       out.chars++;
+      // One message is enough, and the register repeats it after the terminator. A terminator
+      // before any text means the read joined mid-stream, so keep going to the next message.
+      if (!out.text.empty())
+        break;
     } else {
       out.errors++;
     }
@@ -754,7 +763,11 @@ void BadgerMeterComponent::parse_data_(const std::string &data) {
     }
 
     if (ib_pos != std::string::npos && this->meter_id_sensor_ != nullptr) {
-      const size_t id_end = (k_pos != std::string::npos) ? k_pos : data.length();
+      // The ID runs to the next field separator. The E-Series appends further fields after it
+      // (`;GC00;M1D0200,…`), so ending at ";K" or end-of-string swallowed them into the ID.
+      size_t id_end = data.find(';', ib_pos + 3);
+      if (id_end == std::string::npos)
+        id_end = (k_pos != std::string::npos) ? k_pos : data.length();
       this->meter_id_sensor_->publish_state(data.substr(ib_pos + 3, id_end - ib_pos - 3));
     }
 

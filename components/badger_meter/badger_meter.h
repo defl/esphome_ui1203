@@ -122,7 +122,7 @@ class BadgerMeterComponent : public Component {
   // Clocked mode: one sampled bit per power cycle, sampled twice — once while the clock is low
   // (meter unpowered) and once after it rises. If the line never differs between the two, the
   // clock is having no effect on it at all, which is a different fault from a bad decode.
-  static const int MAX_CLOCK_BITS = 400;
+  static const int MAX_CLOCK_BITS = 1000;
   uint8_t bits_[MAX_CLOCK_BITS]{};
   uint8_t low_phase_[MAX_CLOCK_BITS]{};
   // Whether the line dipped at any point in the valid window, not just at the sampled instant.
