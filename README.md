@@ -3,9 +3,28 @@
 ESPHome external component for reading Badger water meters over the **Sensus UI-1203** wired
 encoder interface.
 
-> **Status: diagnostic.** No reading has been decoded from real hardware yet. The component
-> captures the data line and tries to decode it; the framing below is what the reference
-> implementations use, not something a vendor datasheet confirmed. See "What is actually known".
+> **Status: working** on a Badger E-Series ultrasonic (HR encoder) since 2026-09-18:
+>
+> ```
+> V;RB003549269;IB0017118249;GC00;M1D0200,000000
+> ```
+>
+> 7E1, non-inverted, clocked at 417 µs per bit from a 3.3 V GPIO. The component still carries
+> diagnostic scaffolding (pin scan, clock sweep, window watch) from getting there.
+>
+> **Check your cable's colour code first — it cost a full day here.** Badger ships two:
+>
+> | Function | Standard (Sensus) code | **Itron ERT cable** |
+> |---|---|---|
+> | Clock / power | Red | **Black** |
+> | Data | Green (sometimes White) | **Red** |
+> | Common | Black | **White / shield** |
+>
+> A red/black/white cable fits *both* columns. The one here was the Itron variant; wired to the
+> standard code, the meter's clock input sat on ground and it never answered, at any rate or
+> voltage. A DMM diode test tells them apart: the data output's body diode shows as a single
+> ~0.5 V junction from **common (+) to data (−)**, open everywhere else. Sources: SCADAmetrics'
+> EtherMeter compatibility matrix and the TheMeterDisplay / Signalizer datasheets.
 
 ## Hardware
 
